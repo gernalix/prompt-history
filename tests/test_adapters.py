@@ -6,7 +6,12 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from prompt_history.adapters import ingest_chatgpt_export, ingest_codex_usage, ingest_roadmap
+from prompt_history.adapters import (
+    ingest_chatgpt_export,
+    ingest_codex_usage,
+    ingest_roadmap,
+    link_explicit_prompt_ids,
+)
 from prompt_history.store import connect, init_db
 
 
@@ -53,6 +58,40 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM prompts").fetchone()[0], 2)
         relation = self.conn.execute("SELECT relation_type FROM relations").fetchone()[0]
         self.assertEqual(relation, "conversation_parent")
+
+    def test_explicit_prompt_ids_link_chatgpt_to_codex(self) -> None:
+        path = self.root / "links.json"
+        path.write_text(json.dumps([{
+            "id": "conv-links",
+            "title": "Generated prompt",
+            "mapping": {
+                "a": {
+                    "parent": None,
+                    "message": {
+                        "id": "m1",
+                        "author": {"role": "assistant"},
+                        "content": {"parts": [
+                            "PROMPT_ID=333333 | PARENT_PROMPT_ID=222222\nDo the thing."
+                        ]},
+                        "create_time": 1,
+                        "metadata": {},
+                    },
+                },
+            },
+        }]), encoding="utf-8")
+        ingest_chatgpt_export(self.conn, path)
+        relations = {
+            row["relation_type"]
+            for row in self.conn.execute("SELECT relation_type FROM relations")
+        }
+        self.assertIn("generated", relations)
+        self.assertIn("parent", relations)
+        self.assertIsNotNone(
+            self.conn.execute("SELECT 1 FROM prompts WHERE prompt_id='333333'").fetchone()
+        )
+        self.assertIsNotNone(
+            self.conn.execute("SELECT 1 FROM prompts WHERE prompt_id='222222'").fetchone()
+        )
 
     def test_codex_usage_metrics_ingest(self) -> None:
         (self.root / "index").mkdir()
@@ -135,6 +174,10 @@ class AdapterTests(unittest.TestCase):
             (1, "111111", "cycle-1", "GPT-5.6 Terra", "medium", 5, 10, 2, 8, 12, 1, "BLOCKED", "s", "e"),
         )
         src.execute(
+            "INSERT INTO executions VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (2, "222222", "cycle-2", "GPT-5.6 Terra", "medium", 4, 8, 2, 6, 10, 1, "PASS", "s2", "e2"),
+        )
+        src.execute(
             "INSERT INTO analyses VALUES(?,?,?,?,?,?,?)",
             (1, "111111", "222222", "t", "summary", "ref", 1),
         )
@@ -147,11 +190,15 @@ class AdapterTests(unittest.TestCase):
         ).fetchone()
         self.assertEqual(row["prompt_text"], "full body")
         self.assertEqual(row["text_quality"], 100)
-        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM executions").fetchone()[0], 1)
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM executions").fetchone()[0], 2)
         relation = self.conn.execute(
             "SELECT relation_type FROM relations WHERE relation_type='fix_prompt'"
         ).fetchone()
         self.assertIsNotNone(relation)
+        resolved = self.conn.execute(
+            "SELECT relation_type FROM relations WHERE relation_type='resolved_by'"
+        ).fetchone()
+        self.assertIsNotNone(resolved)
 
 
 if __name__ == "__main__":
