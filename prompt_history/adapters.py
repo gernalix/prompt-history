@@ -19,6 +19,30 @@ def _variant(model: str | None) -> str | None:
     return None
 
 
+def _blocker_class(status: str | None, final_response: str | None) -> str | None:
+    if str(status or "").upper() != "BLOCKED" or not final_response:
+        return None
+    match = re.search(r"(?im)^BLOCKER\s*=\s*(.+)$", final_response)
+    if not match:
+        return "unclassified"
+    blocker = match.group(1).strip().lower()
+    if blocker in {"", "none", "n/a"}:
+        return "unclassified"
+    if "claim" in blocker or "not_planned" in blocker:
+        return "roadmap_claim"
+    if "rate limit" in blocker or "429" in blocker:
+        return "rate_limit"
+    if any(term in blocker for term in ("credential", "password", "login", "2fa", "auth")):
+        return "authentication"
+    if any(term in blocker for term in ("manual", "confirm", "click", "load ") ):
+        return "manual_action_required"
+    if "heartbeat" in blocker:
+        return "heartbeat"
+    if any(term in blocker for term in ("test", "ci", "workflow")):
+        return "test_or_ci"
+    return "other"
+
+
 def _read_jsonl(path: Path) -> Iterator[dict[str, Any]]:
     with path.open("r", encoding="utf-8") as handle:
         for lineno, line in enumerate(handle, 1):
@@ -155,6 +179,30 @@ def ingest_roadmap(conn: sqlite3.Connection, roadmap_path: str | Path) -> int:
                     }
                     count += int(ingest_record(conn, record))
 
+            if _table_exists(src, "analyses") and _table_exists(src, "executions"):
+                for row in src.execute(
+                    """SELECT a.analysis_id,a.prompt_id,a.fix_prompt_id,a.analyzed_at
+                       FROM analyses a
+                       WHERE a.fix_prompt_id IS NOT NULL
+                         AND EXISTS(
+                           SELECT 1 FROM executions e
+                           WHERE e.prompt_id=a.fix_prompt_id AND e.outcome='PASS'
+                         )"""
+                ):
+                    item = dict(row)
+                    record = {
+                        "kind": "relation",
+                        "source": "codex-roadmap",
+                        "source_key": f"analysis-resolved:{item['analysis_id']}",
+                        "from_prompt_id": str(item["prompt_id"]),
+                        "to_prompt_id": str(item["fix_prompt_id"]),
+                        "relation_type": "resolved_by",
+                        "confidence": 1.0,
+                        "created_at": item.get("analyzed_at"),
+                        "metadata": {"derived_from": "analysis.fix_prompt_id + PASS execution"},
+                    }
+                    count += int(ingest_record(conn, record))
+
             if _table_exists(src, "artifacts"):
                 for row in src.execute("SELECT * FROM artifacts"):
                     item = dict(row)
@@ -274,6 +322,50 @@ def ingest_chatgpt_export(conn: sqlite3.Connection, conversations_path: str | Pa
                     "confidence": 1.0,
                 }
                 count += int(ingest_record(conn, relation))
+    count += link_explicit_prompt_ids(conn)
+    return count
+
+
+def link_explicit_prompt_ids(conn: sqlite3.Connection) -> int:
+    """Create only deterministic links backed by literal PROMPT_ID markers."""
+    count = 0
+    rows = conn.execute(
+        """SELECT prompt_uid,role,prompt_text,source_key
+           FROM prompts
+           WHERE source='chatgpt' AND prompt_text<>''"""
+    ).fetchall()
+    with conn:
+        for row in rows:
+            text = str(row["prompt_text"] or "")
+            ids = list(dict.fromkeys(re.findall(r"(?<!PARENT_)PROMPT_ID\s*=\s*(\d{6})", text)))
+            relation_type = "generated" if row["role"] == "assistant" else "references_prompt"
+            for prompt_id in ids:
+                record = {
+                    "kind": "relation",
+                    "source": "chatgpt-linker",
+                    "source_key": f"{row['source_key']}:{relation_type}:{prompt_id}",
+                    "from_prompt_uid": str(row["prompt_uid"]),
+                    "to_prompt_id": prompt_id,
+                    "relation_type": relation_type,
+                    "confidence": 1.0,
+                    "metadata": {"evidence": "literal PROMPT_ID marker"},
+                }
+                count += int(ingest_record(conn, record))
+
+            child = re.search(r"(?<!PARENT_)PROMPT_ID\s*=\s*(\d{6})", text)
+            parent = re.search(r"PARENT_PROMPT_ID\s*=\s*(\d{6})", text)
+            if child and parent and child.group(1) != parent.group(1):
+                record = {
+                    "kind": "relation",
+                    "source": "chatgpt-linker",
+                    "source_key": f"{row['source_key']}:parent:{parent.group(1)}:{child.group(1)}",
+                    "from_prompt_id": parent.group(1),
+                    "to_prompt_id": child.group(1),
+                    "relation_type": "parent",
+                    "confidence": 1.0,
+                    "metadata": {"evidence": "literal PARENT_PROMPT_ID + PROMPT_ID markers"},
+                }
+                count += int(ingest_record(conn, record))
     return count
 
 
@@ -332,6 +424,9 @@ def ingest_codex_usage(conn: sqlite3.Connection, repo_path: str | Path) -> int:
                 "total_tokens": merged.get("total_tokens"),
                 "tool_calls": merged.get("tool_call_count"),
                 "result": merged.get("status"),
+                "blocker_class": _blocker_class(
+                    merged.get("status"), merged.get("final_response_redacted")
+                ),
                 "started_at": merged.get("timestamp_start_utc"),
                 "ended_at": merged.get("timestamp_end_utc"),
                 "metadata": {
@@ -342,6 +437,7 @@ def ingest_codex_usage(conn: sqlite3.Connection, repo_path: str | Path) -> int:
                     "uncached_input_tokens": merged.get("uncached_input_tokens"),
                     "tool_calls_by_type": merged.get("tool_calls_by_type"),
                     "turn_count": merged.get("turn_count"),
+                    "final_response_redacted": merged.get("final_response_redacted"),
                 },
             }
             count += int(ingest_record(conn, execution_record))
