@@ -31,12 +31,12 @@ No canonical source is mutated by this project.
 
 The initial implementation supports:
 
-1. `codex-roadmap/roadmap.sqlite`
-2. OpenAI/ChatGPT export `conversations.json`
-3. normalized JSONL records for adapters/exporters that already know their source schema
-4. optional link records that connect ChatGPT prompts, Codex `PROMPT_ID` values and corrective/resolving prompts
+1. `codex-roadmap/roadmap.sqlite` (prompt materializations, relations, executions, analyses and artifacts)
+2. `codex-usage/index/prompts.jsonl` plus per-cycle `metrics.json`
+3. OpenAI/ChatGPT export `conversations.json`
+4. normalized JSONL records for additional adapters/exporters
 
-Adapters for live local formats that cannot be verified from GitHub are intentionally left to the roadmap task in `codex-roadmap`; the schema and JSONL contract are already implemented here so those adapters do not need to redesign the warehouse.
+ChatGPT messages containing literal `PROMPT_ID=<6 digits>` markers are linked deterministically to the corresponding Codex prompt. Assistant messages become `generated` relations, user messages become `references_prompt`, and literal `PARENT_PROMPT_ID` + `PROMPT_ID` pairs become Codex parent relations. No semantic/guess-based linking is performed.
 
 ## Quick start
 
@@ -47,9 +47,15 @@ python3 -m prompt_history.cli ingest-roadmap \
   --db ./prompt_history.sqlite \
   --roadmap ~/projects/codex-roadmap/roadmap.sqlite
 
+python3 -m prompt_history.cli ingest-codex-usage \
+  --db ./prompt_history.sqlite \
+  --repo ~/projects/codex-usage
+
 python3 -m prompt_history.cli ingest-chatgpt \
   --db ./prompt_history.sqlite \
   --conversations ~/Downloads/chatgpt-export/conversations.json
+
+python3 -m prompt_history.cli link --db ./prompt_history.sqlite
 
 python3 -m prompt_history.cli ingest-jsonl \
   --db ./prompt_history.sqlite \
@@ -63,6 +69,12 @@ python3 -m prompt_history.cli similar \
 python3 -m prompt_history.cli model-stats \
   --db ./prompt_history.sqlite \
   --repo PersonalHub
+
+python3 -m prompt_history.cli recommend \
+  --db ./prompt_history.sqlite \
+  --repo PersonalHub \
+  --task-type Prompt \
+  --min-samples 3
 ```
 
 ## Normalized JSONL contract
@@ -97,7 +109,9 @@ Reusable SQL lives under `queries/`:
 - `blocker_analysis.sql`
 - `token_efficiency.sql`
 
-The CLI exposes the first two directly. These reports are descriptive evidence, not an automatic mandate: low-sample comparisons expose sample counts instead of pretending that a single run is conclusive.
+The CLI exposes similarity search, model statistics, blocker summaries and a bounded model/reasoning recommender. The recommender returns no selection when the configured minimum sample count is not met. It ranks only observed combinations and always returns the evidence row used for the recommendation.
+
+When a roadmap analysis names a fix prompt and that fix prompt has a recorded PASS execution, ingestion also materializes a `resolved_by` relation. A mere fix relation without PASS remains only `fix_prompt`.
 
 ## Repository boundaries
 
