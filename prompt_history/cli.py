@@ -7,7 +7,13 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
-from .adapters import ingest_chatgpt_export, ingest_codex_usage, ingest_jsonl, ingest_roadmap
+from .adapters import (
+    ingest_chatgpt_export,
+    ingest_codex_usage,
+    ingest_jsonl,
+    ingest_roadmap,
+    link_explicit_prompt_ids,
+)
 from .store import connect, init_db
 
 
@@ -135,6 +141,17 @@ def cmd_recommend(args: argparse.Namespace) -> None:
         conn.close()
 
 
+def cmd_link(args: argparse.Namespace) -> None:
+    conn = connect(args.db)
+    try:
+        init_db(conn)
+        count = link_explicit_prompt_ids(conn)
+        conn.commit()
+    finally:
+        conn.close()
+    print(f"linked={count}")
+
+
 def cmd_blockers(args: argparse.Namespace) -> None:
     conn = connect(args.db)
     try:
@@ -195,6 +212,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--task-type")
     p.add_argument("--min-samples", type=int, default=3)
     p.set_defaults(func=cmd_recommend)
+
+    p = sub.add_parser("link")
+    p.add_argument("--db", required=True)
+    p.set_defaults(func=cmd_link)
 
     p = sub.add_parser("blockers")
     p.add_argument("--db", required=True)
