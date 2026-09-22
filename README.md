@@ -34,7 +34,9 @@ The initial implementation supports:
 1. `codex-roadmap/roadmap.sqlite` (prompt materializations, relations, executions, analyses and artifacts)
 2. `codex-usage/index/prompts.jsonl` plus per-cycle `metrics.json`
 3. OpenAI/ChatGPT export `conversations.json`
-4. normalized JSONL records for additional adapters/exporters
+4. audited `siraht/ChatGPTExporter` archives (`conversations/*/conversation.json`)
+5. normalized Codex transcripts produced by `janole/session-bandit`
+6. normalized JSONL records for additional adapters/exporters
 
 ChatGPT messages containing literal `PROMPT_ID=<6 digits>` markers are linked deterministically to the corresponding Codex prompt. Assistant messages become `generated` relations, user messages become `references_prompt`, and literal `PARENT_PROMPT_ID` + `PROMPT_ID` pairs become Codex parent relations. No semantic/guess-based linking is performed.
 
@@ -54,6 +56,17 @@ python3 -m prompt_history.cli ingest-codex-usage \
 python3 -m prompt_history.cli ingest-chatgpt \
   --db ./prompt_history.sqlite \
   --conversations ~/Downloads/chatgpt-export/conversations.json
+
+python3 -m prompt_history.cli ingest-chatgpt-exporter \
+  --db ./prompt_history.sqlite \
+  --archive ~/Documents/ChatGPT/ChatGPTExport-workspace
+
+node tools/session_bandit_dump.mjs \
+  ~/.local/share/prompt-history/upstream/session-bandit/packages/core/dist/index.js \
+  ~/.codex/sessions > ~/.local/share/prompt-history/session-bandit-codex.jsonl
+python3 -m prompt_history.cli ingest-session-bandit \
+  --db ./prompt_history.sqlite \
+  --input ~/.local/share/prompt-history/session-bandit-codex.jsonl
 
 python3 -m prompt_history.cli link --db ./prompt_history.sqlite
 
@@ -76,6 +89,23 @@ python3 -m prompt_history.cli recommend \
   --task-type Prompt \
   --min-samples 3
 ```
+
+## Upstream-first extraction
+
+`prompt-history` does not reimplement provider scraping/parsing when a suitable
+audited open-source implementation exists. The supported upstream path is:
+
+- ChatGPT Web capture: `siraht/ChatGPTExporter`, pinned and validated separately;
+  this project reads its normalized `conversation.json` artifacts. The official
+  OpenAI `conversations.json` export remains a fallback.
+- Codex session parsing: `janole/session-bandit`; the small bridge under
+  `tools/session_bandit_dump.mjs` delegates the three historical Codex rollout
+  formats to Session Bandit's adapter. `codex-usage` remains authoritative for
+  execution/token/tool-call metrics, so transcript ingestion does not create
+  duplicate execution rows.
+
+Exact revisions, licenses, trust boundaries and runtime setup are documented in
+`docs/UPSTREAM_INTEGRATIONS.md`.
 
 ## Normalized JSONL contract
 
@@ -104,7 +134,8 @@ Every ingested source row is deduplicated through `(source, source_key, payload_
 
 The derived database is installed at `~/.local/share/prompt-history/prompt_history.sqlite`.
 The user timer `prompt-history-sync.timer` runs `prompt-history-sync.service` about every 15 minutes.
-It reads roadmap, codex-usage and (when present) a ChatGPT `conversations.json`, plus the
+It reads roadmap and codex-usage plus configured ChatGPT/Codex transcript sources
+(`conversations.json`, ChatGPTExporter archive and/or Session Bandit JSONL), and the
 read-only switcher state database. A rebuild removes only the derived database and reruns
 `init` followed by `sync`; no upstream source is changed.
 
