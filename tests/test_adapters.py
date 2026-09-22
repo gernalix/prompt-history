@@ -8,8 +8,10 @@ from pathlib import Path
 
 from prompt_history.adapters import (
     ingest_chatgpt_export,
+    ingest_chatgpt_exporter_archive,
     ingest_codex_usage,
     ingest_roadmap,
+    ingest_session_bandit_export,
     link_explicit_prompt_ids,
 )
 from prompt_history.store import connect, init_db
@@ -92,6 +94,111 @@ class AdapterTests(unittest.TestCase):
         self.assertIsNotNone(
             self.conn.execute("SELECT 1 FROM prompts WHERE prompt_id='222222'").fetchone()
         )
+
+    def test_chatgpt_exporter_archive_ingests_normalized_graph(self) -> None:
+        archive = self.root / "ChatGPTExport-test"
+        conv_dir = archive / "conversations" / "conv-web"
+        conv_dir.mkdir(parents=True)
+        (conv_dir / "conversation.json").write_text(json.dumps({
+            "schemaVersion": 1,
+            "normalizerVersion": "chatgpt-web-v1",
+            "provider": "chatgpt-web",
+            "conversationId": "conv-web",
+            "workspaceFingerprint": "workspace-test",
+            "title": "Web export",
+            "memberships": [{"scope": "main"}],
+            "messages": [
+                {
+                    "id": "m1",
+                    "nodeId": "n1",
+                    "role": "user",
+                    "parentId": None,
+                    "createTime": 1,
+                    "modelSlug": None,
+                    "parts": [{"kind": "text", "text": "PROMPT_ID=333333 do it"}],
+                },
+                {
+                    "id": "m2",
+                    "nodeId": "n2",
+                    "role": "assistant",
+                    "parentId": "n1",
+                    "createTime": 2,
+                    "modelSlug": "gpt-test",
+                    "parts": [{"kind": "text", "text": "done"}],
+                },
+            ],
+        }), encoding="utf-8")
+
+        ingest_chatgpt_exporter_archive(self.conn, archive)
+        self.assertEqual(
+            self.conn.execute("SELECT COUNT(*) FROM prompts WHERE source='chatgpt'").fetchone()[0],
+            2,
+        )
+        self.assertIsNotNone(
+            self.conn.execute(
+                "SELECT 1 FROM relations WHERE relation_type='conversation_parent'"
+            ).fetchone()
+        )
+        self.assertIsNotNone(
+            self.conn.execute(
+                "SELECT 1 FROM relations WHERE relation_type='references_prompt'"
+            ).fetchone()
+        )
+        metadata = json.loads(self.conn.execute(
+            "SELECT metadata_json FROM prompts WHERE source='chatgpt' AND message_id='m2'"
+        ).fetchone()[0])
+        self.assertEqual(metadata["upstream"], "siraht/ChatGPTExporter")
+        self.assertEqual(metadata["model_slug"], "gpt-test")
+
+    def test_session_bandit_ingests_codex_transcript_without_execution_duplication(self) -> None:
+        path = self.root / "session-bandit.jsonl"
+        path.write_text(json.dumps({
+            "agent": "codex",
+            "sessionId": "session-1",
+            "filePath": "/tmp/rollout.jsonl",
+            "project": "/tmp/project",
+            "cwd": "/tmp/project",
+            "startedAt": "2026-09-22T00:00:00Z",
+            "endedAt": "2026-09-22T00:10:00Z",
+            "model": "gpt-5.6-terra",
+            "messageCount": 2,
+            "messages": [
+                {
+                    "role": "user",
+                    "text": "PROMPT_ID=444444\nFix it.",
+                    "toolCalls": [],
+                    "timestamp": "2026-09-22T00:00:00Z",
+                },
+                {
+                    "role": "assistant",
+                    "text": "Fixed.",
+                    "toolCalls": [{"name": "shell", "input": {}, "status": "ok", "output": "ok"}],
+                    "timestamp": "2026-09-22T00:01:00Z",
+                },
+            ],
+            "stats": {"totalInputTokens": 10, "totalOutputTokens": 2},
+        }) + "\n", encoding="utf-8")
+
+        ingest_session_bandit_export(self.conn, path)
+        self.assertIsNotNone(
+            self.conn.execute("SELECT 1 FROM prompts WHERE prompt_id='444444'").fetchone()
+        )
+        self.assertEqual(
+            self.conn.execute("SELECT COUNT(*) FROM executions").fetchone()[0],
+            0,
+        )
+        self.assertIsNotNone(
+            self.conn.execute(
+                "SELECT 1 FROM relations WHERE source='codex-session-bandit' "
+                "AND relation_type='conversation_parent'"
+            ).fetchone()
+        )
+        assistant = self.conn.execute(
+            "SELECT metadata_json FROM prompts "
+            "WHERE source='codex-session-bandit' AND role='assistant'"
+        ).fetchone()
+        self.assertIsNotNone(assistant)
+        self.assertEqual(json.loads(assistant[0])["upstream"], "janole/session-bandit")
 
     def test_codex_usage_metrics_ingest(self) -> None:
         (self.root / "index").mkdir()
