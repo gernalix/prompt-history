@@ -100,6 +100,14 @@ python3 -m prompt_history.cli init --db prompt_history.sqlite
 
 Every ingested source row is deduplicated through `(source, source_key, payload_hash)`, so rerunning an ingester is safe.
 
+## Fedora runtime
+
+The derived database is installed at `~/.local/share/prompt-history/prompt_history.sqlite`.
+The user timer `prompt-history-sync.timer` runs `prompt-history-sync.service` about every 15 minutes.
+It reads roadmap, codex-usage and (when present) a ChatGPT `conversations.json`, plus the
+read-only switcher state database. A rebuild removes only the derived database and reruns
+`init` followed by `sync`; no upstream source is changed.
+
 ## Analytics
 
 Reusable SQL lives under `queries/`:

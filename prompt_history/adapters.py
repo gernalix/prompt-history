@@ -442,3 +442,37 @@ def ingest_codex_usage(conn: sqlite3.Connection, repo_path: str | Path) -> int:
             }
             count += int(ingest_record(conn, execution_record))
     return count
+
+
+def ingest_switcher(conn: sqlite3.Connection, db_path: str | Path) -> int:
+    """Read stable prompt bindings and browser contexts without mutating switcher state."""
+    src = sqlite3.connect(f"file:{Path(db_path).expanduser().resolve()}?mode=ro", uri=True)
+    src.row_factory = sqlite3.Row
+    count = 0
+    try:
+        contexts = {r["id"]: dict(r) for r in src.execute("SELECT * FROM contexts")}
+        with conn:
+            for row in src.execute("SELECT * FROM prompt_bindings"):
+                item = dict(row)
+                pid = str(item["prompt_id"])
+                context = contexts.get(item.get("context_id"), {})
+                record = {"kind": "prompt", "source": "chrome-codex-switcher",
+                          "source_key": pid, "prompt_id": pid, "prompt_text": "",
+                          "text_quality": 0, "conversation_id": item.get("context_id"),
+                          "metadata": {"codex_thread": item.get("codex_thread"),
+                                       "codex_deep_link": item.get("codex_deep_link"),
+                                       "context_url": context.get("url"),
+                                       "context_title": context.get("title"),
+                                       "note": context.get("note")}}
+                count += int(ingest_record(conn, record))
+                if item.get("codex_thread") or item.get("codex_deep_link"):
+                    artifact = {"kind": "artifact", "source": "chrome-codex-switcher",
+                                "source_key": pid + ":binding", "prompt_id": pid,
+                                "artifact_type": "codex_binding",
+                                "artifact_key": item.get("codex_deep_link") or item.get("codex_thread"),
+                                "url": item.get("codex_deep_link"),
+                                "metadata": {"context_id": item.get("context_id")}}
+                    count += int(ingest_record(conn, artifact))
+    finally:
+        src.close()
+    return count

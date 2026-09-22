@@ -12,6 +12,7 @@ from .adapters import (
     ingest_codex_usage,
     ingest_jsonl,
     ingest_roadmap,
+    ingest_switcher,
     link_explicit_prompt_ids,
 )
 from .store import connect, init_db
@@ -152,6 +153,29 @@ def cmd_link(args: argparse.Namespace) -> None:
     print(f"linked={count}")
 
 
+def cmd_sync(args: argparse.Namespace) -> None:
+    """Run all configured local read-only importers; safe to repeat."""
+    conn = connect(args.db)
+    counts = {}
+    try:
+        init_db(conn)
+        counts["roadmap"] = ingest_roadmap(conn, args.roadmap)
+        counts["codex_usage"] = ingest_codex_usage(conn, args.codex_usage)
+        if args.chatgpt and Path(args.chatgpt).is_file():
+            counts["chatgpt"] = ingest_chatgpt_export(conn, args.chatgpt)
+        else:
+            counts["chatgpt"] = 0
+        if args.switcher and Path(args.switcher).is_file():
+            counts["switcher"] = ingest_switcher(conn, args.switcher)
+        else:
+            counts["switcher"] = 0
+        counts["links"] = link_explicit_prompt_ids(conn)
+        conn.commit()
+    finally:
+        conn.close()
+    print(json.dumps(counts, sort_keys=True))
+
+
 def cmd_blockers(args: argparse.Namespace) -> None:
     conn = connect(args.db)
     try:
@@ -216,6 +240,14 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("link")
     p.add_argument("--db", required=True)
     p.set_defaults(func=cmd_link)
+
+    p = sub.add_parser("sync")
+    p.add_argument("--db", required=True)
+    p.add_argument("--roadmap", required=True)
+    p.add_argument("--codex-usage", required=True)
+    p.add_argument("--chatgpt")
+    p.add_argument("--switcher")
+    p.set_defaults(func=cmd_sync)
 
     p = sub.add_parser("blockers")
     p.add_argument("--db", required=True)
