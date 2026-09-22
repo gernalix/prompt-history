@@ -436,22 +436,26 @@ def ingest_chatgpt_exporter_archive(conn: sqlite3.Connection, archive_path: str 
 
 
 def _json_records(path: Path) -> list[dict[str, Any]]:
-    text = path.read_text(encoding="utf-8").strip()
-    if not text:
-        return []
-    if text.startswith("["):
-        value = json.loads(text)
-        if not isinstance(value, list):
-            raise ValueError("expected JSON array")
-        return [row for row in value if isinstance(row, dict)]
     rows: list[dict[str, Any]] = []
-    for lineno, line in enumerate(text.splitlines(), 1):
-        if not line.strip():
-            continue
-        value = json.loads(line)
-        if not isinstance(value, dict):
-            raise ValueError(f"{path}:{lineno}: expected JSON object")
-        rows.append(value)
+    with path.open("r", encoding="utf-8") as handle:
+        first = handle.read(1)
+        while first and first.isspace():
+            first = handle.read(1)
+        if not first:
+            return rows
+        handle.seek(0)
+        if first == "[":
+            value = json.load(handle)
+            if not isinstance(value, list):
+                raise ValueError("expected JSON array")
+            return [row for row in value if isinstance(row, dict)]
+        for lineno, line in enumerate(handle, 1):
+            if not line.strip():
+                continue
+            value = json.loads(line)
+            if not isinstance(value, dict):
+                raise ValueError(f"{path}:{lineno}: expected JSON object")
+            rows.append(value)
     return rows
 
 
