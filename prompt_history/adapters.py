@@ -326,6 +326,213 @@ def ingest_chatgpt_export(conn: sqlite3.Connection, conversations_path: str | Pa
     return count
 
 
+
+def _normalized_parts_text(parts: Any) -> str:
+    if not isinstance(parts, list):
+        return ""
+    out: list[str] = []
+    for part in parts:
+        if isinstance(part, str):
+            if part:
+                out.append(part)
+            continue
+        if not isinstance(part, dict):
+            continue
+        text = part.get("text")
+        if isinstance(text, str) and text:
+            out.append(text)
+    return "\n".join(out).strip()
+
+
+def ingest_chatgpt_exporter_archive(conn: sqlite3.Connection, archive_path: str | Path) -> int:
+    """Ingest ChatGPTExporter normalized conversation.json files read-only.
+
+    ChatGPTExporter is an MIT upstream that already owns live Web capture. This
+    adapter deliberately consumes its stable normalized archive instead of
+    reimplementing private ChatGPT Web endpoints here.
+    """
+    root = Path(archive_path).expanduser()
+    conversation_root = root / "conversations"
+    if not conversation_root.is_dir():
+        raise FileNotFoundError(conversation_root)
+
+    paths = sorted(conversation_root.glob("*/conversation.json"))
+    if not paths:
+        raise ValueError(f"no ChatGPTExporter conversation.json files under {conversation_root}")
+
+    count = 0
+    for path in paths:
+        conversation = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(conversation, dict):
+            continue
+        if conversation.get("provider") not in {None, "chatgpt-web"}:
+            continue
+        conversation_id = str(conversation.get("conversationId") or path.parent.name)
+        title = conversation.get("title")
+        workspace = conversation.get("workspaceFingerprint")
+        messages = conversation.get("messages") or []
+        memberships = conversation.get("memberships") or []
+        if not isinstance(messages, list):
+            continue
+
+        uid_by_node: dict[str, str] = {}
+        pending_relations: list[tuple[str, str]] = []
+        with conn:
+            for index, message in enumerate(messages):
+                if not isinstance(message, dict):
+                    continue
+                role = message.get("role")
+                if role not in {"user", "assistant"}:
+                    continue
+                message_id = str(message.get("id") or f"message-{index}")
+                node_id = str(message.get("nodeId") or message_id)
+                source_key = f"{conversation_id}:{message_id}"
+                record = {
+                    "kind": "prompt",
+                    "source": "chatgpt",
+                    "source_key": source_key,
+                    "conversation_id": conversation_id,
+                    "message_id": message_id,
+                    "role": role,
+                    "title": title,
+                    "prompt_text": _normalized_parts_text(message.get("parts")),
+                    "text_quality": 100,
+                    "created_at": _iso_from_epoch(message.get("createTime")),
+                    "metadata": {
+                        "provider": "chatgpt-web",
+                        "upstream": "siraht/ChatGPTExporter",
+                        "normalizer_version": conversation.get("normalizerVersion"),
+                        "workspace_fingerprint": workspace,
+                        "memberships": memberships,
+                        "model_slug": message.get("modelSlug"),
+                        "recipient": message.get("recipient"),
+                        "selected": message.get("selected"),
+                        "status": message.get("status"),
+                    },
+                }
+                uid = prompt_uid_for(record)
+                uid_by_node[node_id] = uid
+                count += int(ingest_record(conn, record))
+                parent_id = message.get("parentId")
+                if parent_id is not None:
+                    pending_relations.append((str(parent_id), node_id))
+
+            for parent_node, child_node in pending_relations:
+                if parent_node not in uid_by_node or child_node not in uid_by_node:
+                    continue
+                relation = {
+                    "kind": "relation",
+                    "source": "chatgpt",
+                    "source_key": f"{conversation_id}:{parent_node}->{child_node}",
+                    "from_prompt_uid": uid_by_node[parent_node],
+                    "to_prompt_uid": uid_by_node[child_node],
+                    "relation_type": "conversation_parent",
+                    "confidence": 1.0,
+                    "metadata": {"upstream": "siraht/ChatGPTExporter"},
+                }
+                count += int(ingest_record(conn, relation))
+    count += link_explicit_prompt_ids(conn)
+    return count
+
+
+def _json_records(path: Path) -> list[dict[str, Any]]:
+    text = path.read_text(encoding="utf-8").strip()
+    if not text:
+        return []
+    if text.startswith("["):
+        value = json.loads(text)
+        if not isinstance(value, list):
+            raise ValueError("expected JSON array")
+        return [row for row in value if isinstance(row, dict)]
+    rows: list[dict[str, Any]] = []
+    for lineno, line in enumerate(text.splitlines(), 1):
+        if not line.strip():
+            continue
+        value = json.loads(line)
+        if not isinstance(value, dict):
+            raise ValueError(f"{path}:{lineno}: expected JSON object")
+        rows.append(value)
+    return rows
+
+
+def ingest_session_bandit_export(conn: sqlite3.Connection, input_path: str | Path) -> int:
+    """Ingest normalized Codex sessions emitted by @session-bandit/core.
+
+    The companion tools/session_bandit_dump.mjs bridge delegates Codex format
+    handling to Session Bandit's MIT adapter, including its legacy and modern
+    rollout formats. codex-usage remains the canonical execution-metrics source;
+    this adapter contributes transcript/provenance without double-counting cost.
+    """
+    path = Path(input_path).expanduser()
+    sessions = _json_records(path)
+    count = 0
+
+    with conn:
+        for session in sessions:
+            if session.get("agent") != "codex":
+                continue
+            session_id = str(session.get("sessionId") or "")
+            if not session_id:
+                continue
+            messages = session.get("messages") or []
+            if not isinstance(messages, list):
+                continue
+            previous_uid: str | None = None
+            for index, message in enumerate(messages):
+                if not isinstance(message, dict):
+                    continue
+                role = str(message.get("role") or "")
+                if role not in {"user", "assistant", "system", "tool", "summary"}:
+                    continue
+                prompt_text = str(message.get("text") or "")
+                prompt_id = None
+                if role == "user":
+                    match = re.search(r"(?<!PARENT_)PROMPT_ID\s*=\s*(\d{6})", prompt_text)
+                    if match:
+                        prompt_id = match.group(1)
+                source_key = f"{session_id}:{index}"
+                record = {
+                    "kind": "prompt",
+                    "source": "codex-session-bandit",
+                    "source_key": source_key,
+                    "prompt_id": prompt_id,
+                    "conversation_id": session_id,
+                    "message_id": str(index),
+                    "role": role,
+                    "title": session.get("project") or f"Codex {session_id[:12]}",
+                    "prompt_text": prompt_text,
+                    "text_quality": 90,
+                    "created_at": message.get("timestamp") or session.get("startedAt"),
+                    "metadata": {
+                        "upstream": "janole/session-bandit",
+                        "agent": "codex",
+                        "file_path": session.get("filePath"),
+                        "project": session.get("project"),
+                        "cwd": session.get("cwd"),
+                        "model": session.get("model"),
+                        "ended_at": session.get("endedAt"),
+                        "subtype": message.get("subtype"),
+                        "tool_calls": message.get("toolCalls") or [],
+                        "message_stats": message.get("stats"),
+                        "session_stats": session.get("stats"),
+                    },
+                }
+                uid = prompt_uid_for(record)
+                count += int(ingest_record(conn, record))
+                if previous_uid is not None:
+                    count += int(ingest_record(conn, {
+                        "kind": "relation",
+                        "source": "codex-session-bandit",
+                        "source_key": f"{session_id}:{index - 1}->{index}",
+                        "from_prompt_uid": previous_uid,
+                        "to_prompt_uid": uid,
+                        "relation_type": "conversation_parent",
+                        "confidence": 1.0,
+                        "metadata": {"upstream": "janole/session-bandit"},
+                    }))
+                previous_uid = uid
+    return count
+
 def link_explicit_prompt_ids(conn: sqlite3.Connection) -> int:
     """Create only deterministic links backed by literal PROMPT_ID markers."""
     count = 0
