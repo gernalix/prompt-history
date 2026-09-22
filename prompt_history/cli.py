@@ -9,9 +9,11 @@ from typing import Any
 
 from .adapters import (
     ingest_chatgpt_export,
+    ingest_chatgpt_exporter_archive,
     ingest_codex_usage,
     ingest_jsonl,
     ingest_roadmap,
+    ingest_session_bandit_export,
     ingest_switcher,
     link_explicit_prompt_ids,
 )
@@ -165,6 +167,14 @@ def cmd_sync(args: argparse.Namespace) -> None:
             counts["chatgpt"] = ingest_chatgpt_export(conn, args.chatgpt)
         else:
             counts["chatgpt"] = 0
+        if args.chatgpt_exporter and Path(args.chatgpt_exporter).is_dir():
+            counts["chatgpt_exporter"] = ingest_chatgpt_exporter_archive(conn, args.chatgpt_exporter)
+        else:
+            counts["chatgpt_exporter"] = 0
+        if args.session_bandit and Path(args.session_bandit).is_file():
+            counts["session_bandit"] = ingest_session_bandit_export(conn, args.session_bandit)
+        else:
+            counts["session_bandit"] = 0
         if args.switcher and Path(args.switcher).is_file():
             counts["switcher"] = ingest_switcher(conn, args.switcher)
         else:
@@ -211,6 +221,16 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--conversations", required=True)
     p.set_defaults(func=lambda a: _with_db(a, ingest_chatgpt_export, a.conversations))
 
+    p = sub.add_parser("ingest-chatgpt-exporter")
+    p.add_argument("--db", required=True)
+    p.add_argument("--archive", required=True)
+    p.set_defaults(func=lambda a: _with_db(a, ingest_chatgpt_exporter_archive, a.archive))
+
+    p = sub.add_parser("ingest-session-bandit")
+    p.add_argument("--db", required=True)
+    p.add_argument("--input", required=True)
+    p.set_defaults(func=lambda a: _with_db(a, ingest_session_bandit_export, a.input))
+
     p = sub.add_parser("ingest-jsonl")
     p.add_argument("--db", required=True)
     p.add_argument("--input", required=True)
@@ -246,6 +266,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--roadmap", required=True)
     p.add_argument("--codex-usage", required=True)
     p.add_argument("--chatgpt")
+    p.add_argument("--chatgpt-exporter")
+    p.add_argument("--session-bandit")
     p.add_argument("--switcher")
     p.set_defaults(func=cmd_sync)
 
