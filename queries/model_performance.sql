@@ -21,7 +21,7 @@ per_prompt AS (
     MIN(variant) AS variant,
     MIN(reasoning) AS reasoning,
     COUNT(DISTINCT model) AS model_count,
-    COUNT(DISTINCT COALESCE(reasoning,'')) AS reasoning_count,
+    COUNT(DISTINCT reasoning) AS reasoning_count,
     SUM(
       CASE WHEN input_tokens IS NOT NULL OR output_tokens IS NOT NULL
            THEN COALESCE(input_tokens,0)+COALESCE(output_tokens,0)
