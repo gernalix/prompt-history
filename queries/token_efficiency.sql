@@ -18,7 +18,7 @@ per_prompt AS (
     MIN(variant) AS variant,
     MIN(reasoning) AS reasoning,
     COUNT(DISTINCT model) AS model_count,
-    COUNT(DISTINCT COALESCE(reasoning,'')) AS reasoning_count,
+    COUNT(DISTINCT reasoning) AS reasoning_count,
     SUM(COALESCE(input_tokens,0)) AS input_tokens,
     SUM(COALESCE(output_tokens,0)) AS output_tokens,
     SUM(COALESCE(cached_tokens,0)) AS cached_tokens,
