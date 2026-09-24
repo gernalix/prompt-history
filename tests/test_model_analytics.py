@@ -149,6 +149,21 @@ class ModelAnalyticsTests(unittest.TestCase):
         self.assertEqual(250.0, row["avg_total_tokens"])
         self.assertEqual(3.5, row["avg_tool_calls"])
 
+        view = self.db.execute(
+            """SELECT prompts,executions,pass_count,blocked_count,fail_count,
+                      avg_total_tokens,avg_tool_calls
+               FROM v_model_performance
+               WHERE model='gpt-6-luna' AND reasoning='medium'"""
+        ).fetchone()
+        self.assertIsNotNone(view)
+        self.assertEqual(2, view["prompts"])
+        self.assertEqual(2, view["executions"])
+        self.assertEqual(2, view["pass_count"])
+        self.assertEqual(0, view["blocked_count"])
+        self.assertEqual(0, view["fail_count"])
+        self.assertEqual(250.0, view["avg_total_tokens"])
+        self.assertEqual(3.5, view["avg_tool_calls"])
+
     def test_fallback_uses_max_total_when_detailed_cycle_tokens_are_absent(self) -> None:
         self.add_prompt("333333")
         self.add_execution(
