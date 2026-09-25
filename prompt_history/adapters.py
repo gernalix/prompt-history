@@ -352,13 +352,26 @@ def ingest_chatgpt_exporter_archive(conn: sqlite3.Connection, archive_path: str 
     reimplementing private ChatGPT Web endpoints here.
     """
     root = Path(archive_path).expanduser()
-    conversation_root = root / "conversations"
-    if not conversation_root.is_dir():
-        raise FileNotFoundError(conversation_root)
+    if (root / "conversations").is_dir():
+        archive_roots = [root]
+    elif root.is_dir():
+        archive_roots = sorted(
+            candidate
+            for candidate in root.glob("ChatGPTExport-*")
+            if (candidate / "conversations").is_dir()
+        )
+    else:
+        archive_roots = []
+    if not archive_roots:
+        raise FileNotFoundError(root / "conversations")
 
-    paths = sorted(conversation_root.glob("*/conversation.json"))
+    paths = sorted(
+        path
+        for archive_root in archive_roots
+        for path in (archive_root / "conversations").glob("*/conversation.json")
+    )
     if not paths:
-        raise ValueError(f"no ChatGPTExporter conversation.json files under {conversation_root}")
+        raise ValueError(f"no ChatGPTExporter conversation.json files under {root}")
 
     count = 0
     for path in paths:
