@@ -1,0 +1,11 @@
+[Unit]
+Description=Periodic heavy transcript refresh for prompt history
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=60min
+Persistent=true
+Unit=prompt-history-transcripts.service
+
+[Install]
+WantedBy=timers.target
