@@ -248,7 +248,13 @@ def _iso_from_epoch(value: Any) -> str | None:
     if not isinstance(value, (int, float)):
         return None
     from datetime import datetime, timezone
-    return datetime.fromtimestamp(float(value), tz=timezone.utc).isoformat().replace("+00:00", "Z")
+    seconds = float(value)
+    if abs(seconds) >= 100_000_000_000:
+        seconds /= 1000.0
+    try:
+        return datetime.fromtimestamp(seconds, tz=timezone.utc).isoformat().replace("+00:00", "Z")
+    except (OverflowError, OSError, ValueError):
+        return None
 
 
 def ingest_chatgpt_export(conn: sqlite3.Connection, conversations_path: str | Path) -> int:
