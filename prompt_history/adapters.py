@@ -329,7 +329,22 @@ def ingest_chatgpt_export(conn: sqlite3.Connection, conversations_path: str | Pa
                     "confidence": 1.0,
                 }
                 count += int(ingest_record(conn, relation))
-    count += link_explicit_prompt_ids(conn)
+
+            _record_chatgpt_exporter_file(
+                conn,
+                source_key=marker_key,
+                digest=marker_digest,
+            )
+
+    with conn:
+        for archive_marker_key, archive_marker_digest in archive_markers.values():
+            _record_chatgpt_exporter_archive(
+                conn,
+                source_key=archive_marker_key,
+                digest=archive_marker_digest,
+            )
+    if count:
+        count += link_explicit_prompt_ids(conn)
     return count
 
 
@@ -543,6 +558,20 @@ def ingest_chatgpt_exporter_archive(conn: sqlite3.Connection, archive_path: str 
                     "metadata": {"upstream": "siraht/ChatGPTExporter"},
                 }
                 count += int(ingest_record(conn, relation))
+
+            _record_chatgpt_exporter_file(
+                conn,
+                source_key=marker_key,
+                digest=marker_digest,
+            )
+
+    with conn:
+        for archive_marker_key, archive_marker_digest in archive_markers.values():
+            _record_chatgpt_exporter_archive(
+                conn,
+                source_key=archive_marker_key,
+                digest=archive_marker_digest,
+            )
     count += link_explicit_prompt_ids(conn)
     return count
 
