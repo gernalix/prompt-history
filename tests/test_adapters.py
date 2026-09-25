@@ -4,6 +4,7 @@ import json
 import sqlite3
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 from prompt_history import adapters
@@ -185,6 +186,48 @@ class AdapterTests(unittest.TestCase):
             self.conn.execute("SELECT COUNT(*) FROM prompts WHERE source='chatgpt'").fetchone()[0],
             2,
         )
+
+    def test_chatgpt_exporter_manifest_skips_unchanged_workspace_without_hashing_conversations(self) -> None:
+        archive = self.root / "ChatGPTExport-fast"
+        conv_dir = archive / "conversations" / "conv-fast"
+        conv_dir.mkdir(parents=True)
+        conversation = conv_dir / "conversation.json"
+        conversation.write_text(json.dumps({
+            "provider": "chatgpt-web",
+            "conversationId": "conv-fast",
+            "workspaceFingerprint": "fast",
+            "title": "Fast path",
+            "messages": [{
+                "id": "m1",
+                "nodeId": "n1",
+                "role": "user",
+                "parentId": None,
+                "createTime": 1,
+                "parts": [{"kind": "text", "text": "first"}],
+            }],
+        }), encoding="utf-8")
+        manifest = archive / "archive.json"
+        manifest.write_text(json.dumps({
+            "schemaVersion": 1,
+            "provider": "chatgpt-web",
+            "workspaceFingerprint": "fast",
+            "currentIndexHashes": {"conversations": "v1"},
+        }), encoding="utf-8")
+
+        with mock.patch(
+            "prompt_history.adapters._file_sha256",
+            wraps=adapters._file_sha256,
+        ) as hashed:
+            first = ingest_chatgpt_exporter_archive(self.conn, self.root)
+            first_calls = hashed.call_count
+            hashed.reset_mock()
+            second = ingest_chatgpt_exporter_archive(self.conn, self.root)
+            second_calls = hashed.call_count
+
+        self.assertGreater(first, 0)
+        self.assertEqual(second, 0)
+        self.assertGreaterEqual(first_calls, 2)
+        self.assertEqual(second_calls, 1)
 
     def test_session_bandit_ingests_codex_transcript_without_execution_duplication(self) -> None:
         path = self.root / "session-bandit.jsonl"
