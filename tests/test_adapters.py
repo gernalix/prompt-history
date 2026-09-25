@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from prompt_history import adapters
 from prompt_history.adapters import (
     ingest_chatgpt_export,
     ingest_chatgpt_exporter_archive,
@@ -18,6 +19,11 @@ from prompt_history.store import connect, init_db
 
 
 class AdapterTests(unittest.TestCase):
+    def test_iso_from_epoch_accepts_seconds_and_milliseconds(self) -> None:
+        self.assertEqual(adapters._iso_from_epoch(1_790_000_000), "2026-09-21T14:13:20Z")
+        self.assertEqual(adapters._iso_from_epoch(1_790_000_000_000), "2026-09-21T14:13:20Z")
+        self.assertIsNone(adapters._iso_from_epoch(float("inf")))
+
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
