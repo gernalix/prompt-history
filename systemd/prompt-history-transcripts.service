@@ -1,0 +1,8 @@
+[Unit]
+Description=Refresh heavy Codex transcript evidence for prompt history
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/projects/prompt-history
+ExecStartPre=/usr/bin/mkdir -p %h/.local/state/prompt-history
+ExecStart=/usr/bin/flock -w 120 %h/.local/state/prompt-history/sync.lock /usr/bin/bash -lc '/usr/bin/node tools/session_bandit_dump.mjs %h/.local/share/prompt-history/upstream/session-bandit/packages/core/dist/index.js %h/.codex/sessions > %h/.local/share/prompt-history/session-bandit-codex.jsonl.tmp && /usr/bin/mv %h/.local/share/prompt-history/session-bandit-codex.jsonl.tmp %h/.local/share/prompt-history/session-bandit-codex.jsonl && exec /usr/bin/python3 -m prompt_history.cli ingest-session-bandit --db %h/.local/share/prompt-history/prompt_history.sqlite --input %h/.local/share/prompt-history/session-bandit-codex.jsonl'

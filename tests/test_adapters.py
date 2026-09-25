@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from prompt_history import adapters
 from prompt_history.adapters import (
     ingest_chatgpt_export,
     ingest_chatgpt_exporter_archive,
@@ -18,6 +19,11 @@ from prompt_history.store import connect, init_db
 
 
 class AdapterTests(unittest.TestCase):
+    def test_iso_from_epoch_accepts_seconds_and_milliseconds(self) -> None:
+        self.assertEqual(adapters._iso_from_epoch(1_790_000_000), "2026-09-21T14:13:20Z")
+        self.assertEqual(adapters._iso_from_epoch(1_790_000_000_000), "2026-09-21T14:13:20Z")
+        self.assertIsNone(adapters._iso_from_epoch(float("inf")))
+
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
@@ -149,6 +155,36 @@ class AdapterTests(unittest.TestCase):
         ).fetchone()[0])
         self.assertEqual(metadata["upstream"], "siraht/ChatGPTExporter")
         self.assertEqual(metadata["model_slug"], "gpt-test")
+
+    def test_chatgpt_exporter_parent_ingests_multiple_archives_idempotently(self) -> None:
+        for suffix, conversation_id in (("one", "conv-one"), ("two", "conv-two")):
+            conv_dir = self.root / f"ChatGPTExport-{suffix}" / "conversations" / conversation_id
+            conv_dir.mkdir(parents=True)
+            (conv_dir / "conversation.json").write_text(json.dumps({
+                "schemaVersion": 1,
+                "provider": "chatgpt-web",
+                "conversationId": conversation_id,
+                "workspaceFingerprint": suffix,
+                "title": suffix,
+                "messages": [{
+                    "id": "m1",
+                    "nodeId": "n1",
+                    "role": "user",
+                    "parentId": None,
+                    "createTime": 1,
+                    "parts": [{"kind": "text", "text": f"message {suffix}"}],
+                }],
+            }), encoding="utf-8")
+
+        first = ingest_chatgpt_exporter_archive(self.conn, self.root)
+        second = ingest_chatgpt_exporter_archive(self.conn, self.root)
+
+        self.assertGreater(first, 0)
+        self.assertEqual(second, 0)
+        self.assertEqual(
+            self.conn.execute("SELECT COUNT(*) FROM prompts WHERE source='chatgpt'").fetchone()[0],
+            2,
+        )
 
     def test_session_bandit_ingests_codex_transcript_without_execution_duplication(self) -> None:
         path = self.root / "session-bandit.jsonl"

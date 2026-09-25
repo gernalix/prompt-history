@@ -1,7 +1,8 @@
 [Unit]
-Description=Sync derived prompt history evidence warehouse
+Description=Sync lightweight derived prompt history evidence
 
 [Service]
 Type=oneshot
-WorkingDirectory=/home/daniele/projects/prompt-history
-ExecStart=/usr/bin/bash -lc '/usr/bin/node tools/session_bandit_dump.mjs %h/.local/share/prompt-history/upstream/session-bandit/packages/core/dist/index.js %h/.codex/sessions > %h/.local/share/prompt-history/session-bandit-codex.jsonl.tmp && /usr/bin/mv %h/.local/share/prompt-history/session-bandit-codex.jsonl.tmp %h/.local/share/prompt-history/session-bandit-codex.jsonl && exec /usr/bin/python3 -m prompt_history.cli sync --db %h/.local/share/prompt-history/prompt_history.sqlite --roadmap %h/projects/codex-roadmap/roadmap.sqlite --codex-usage %h/projects/codex-usage --session-bandit %h/.local/share/prompt-history/session-bandit-codex.jsonl --switcher %h/.local/state/chrome-codex-switcher/state.sqlite3'
+WorkingDirectory=%h/projects/prompt-history
+ExecStartPre=/usr/bin/mkdir -p %h/.local/state/prompt-history
+ExecStart=/usr/bin/flock -w 120 %h/.local/state/prompt-history/sync.lock /usr/bin/python3 -m prompt_history.cli sync --db %h/.local/share/prompt-history/prompt_history.sqlite --roadmap %h/projects/codex-roadmap/roadmap.sqlite --codex-usage %h/projects/codex-usage --chatgpt-exporter %h/Documents/ChatGPT --switcher %h/.local/state/chrome-codex-switcher/state.sqlite3
