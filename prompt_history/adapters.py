@@ -330,21 +330,7 @@ def ingest_chatgpt_export(conn: sqlite3.Connection, conversations_path: str | Pa
                 }
                 count += int(ingest_record(conn, relation))
 
-            _record_chatgpt_exporter_file(
-                conn,
-                source_key=marker_key,
-                digest=marker_digest,
-            )
-
-    with conn:
-        for archive_marker_key, archive_marker_digest in archive_markers.values():
-            _record_chatgpt_exporter_archive(
-                conn,
-                source_key=archive_marker_key,
-                digest=archive_marker_digest,
-            )
-    if count:
-        count += link_explicit_prompt_ids(conn)
+    count += link_explicit_prompt_ids(conn)
     return count
 
 
