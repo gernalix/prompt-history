@@ -134,10 +134,12 @@ Every ingested source row is deduplicated through `(source, source_key, payload_
 
 The derived database is installed at `~/.local/share/prompt-history/prompt_history.sqlite`.
 The user timer `prompt-history-sync.timer` runs `prompt-history-sync.service` about every 15 minutes.
-It reads roadmap and codex-usage plus configured ChatGPT/Codex transcript sources
-(`conversations.json`, ChatGPTExporter archive and/or Session Bandit JSONL), and the
-read-only switcher state database. A rebuild removes only the derived database and reruns
-`init` followed by `sync`; no upstream source is changed.
+The versioned units live under `systemd/`. The deployed service reads roadmap and
+codex-usage, all `ChatGPTExport-*` archives below `~/Documents/ChatGPT`, the Session
+Bandit Codex JSONL bridge, and the read-only switcher state database. Passing the parent
+ChatGPT directory is intentional: the adapter discovers one or more normalized exporter
+archives and deduplicates them by canonical source keys. A rebuild removes only the
+derived database and reruns `init` followed by `sync`; no upstream source is changed.
 
 ## Analytics
 
