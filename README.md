@@ -159,7 +159,7 @@ Reusable SQL lives under `queries/`:
 - `blocker_analysis.sql`
 - `token_efficiency.sql`
 
-The CLI exposes similarity search, model statistics, blocker summaries and a bounded model/reasoning recommender. The recommender returns no selection when the configured minimum sample count is not met. It ranks only observed combinations and always returns the evidence row used for the recommendation.
+The CLI exposes similarity search, model statistics, blocker summaries and a bounded model/reasoning recommender. Cost/model analytics use **one sample per canonical PROMPT_ID**, not one sample per Codex turn: raw cycle executions remain available for audit, but ranking uses only the authoritative `codex-usage` execution metrics, aggregates per-cycle token/tool/duration cost per prompt, ignores mirrored roadmap execution rows, and excludes prompts that changed model/reasoning mid-task. This prevents long `/goal` continuations and cumulative goal totals from being counted multiple times. The recommender returns no selection when the configured minimum sample count is not met. It ranks only observed combinations and always returns the evidence row used for the recommendation.
 
 When a roadmap analysis names a fix prompt and that fix prompt has a recorded PASS execution, ingestion also materializes a `resolved_by` relation. A mere fix relation without PASS remains only `fix_prompt`.
 

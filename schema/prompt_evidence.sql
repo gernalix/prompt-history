@@ -120,20 +120,75 @@ CREATE VIRTUAL TABLE IF NOT EXISTS prompt_fts USING fts5(
 
 DROP VIEW IF EXISTS v_model_performance;
 CREATE VIEW v_model_performance AS
+WITH codex AS (
+  SELECT e.*,
+         ROW_NUMBER() OVER (
+           PARTITION BY e.prompt_uid
+           ORDER BY
+             CASE WHEN e.result IS NOT NULL AND e.result<>'UNKNOWN' THEN 0 ELSE 1 END,
+             COALESCE(e.ended_at,e.started_at,e.updated_at,e.inserted_at) DESC,
+             e.execution_uid DESC
+         ) AS result_rank
+  FROM executions e
+  WHERE e.source='codex-usage'
+),
+per_prompt AS (
+  SELECT
+    prompt_uid,
+    MIN(model) AS model,
+    MIN(variant) AS variant,
+    MIN(reasoning) AS reasoning,
+    COUNT(DISTINCT model) AS model_count,
+    COUNT(DISTINCT reasoning) AS reasoning_count,
+    SUM(
+      CASE WHEN input_tokens IS NOT NULL OR output_tokens IS NOT NULL
+           THEN COALESCE(input_tokens,0)+COALESCE(output_tokens,0)
+           ELSE 0 END
+    ) AS detailed_tokens,
+    SUM(
+      CASE WHEN input_tokens IS NOT NULL OR output_tokens IS NOT NULL
+           THEN 1 ELSE 0 END
+    ) AS detailed_cycles,
+    MAX(COALESCE(total_tokens,0)) AS fallback_total_tokens,
+    SUM(COALESCE(tool_calls,0)) AS tool_calls,
+    SUM(COALESCE(duration_seconds,0)) AS duration_seconds
+  FROM codex
+  GROUP BY prompt_uid
+),
+effective_result AS (
+  SELECT prompt_uid,result
+  FROM codex
+  WHERE result_rank=1
+),
+sample AS (
+  SELECT
+    x.prompt_uid,
+    x.model,
+    x.variant,
+    x.reasoning,
+    CASE WHEN x.detailed_cycles>0 THEN x.detailed_tokens ELSE x.fallback_total_tokens END AS total_tokens,
+    x.tool_calls,
+    x.duration_seconds,
+    r.result
+  FROM per_prompt x
+  JOIN effective_result r USING(prompt_uid)
+  WHERE x.model_count=1 AND x.reasoning_count<=1 AND x.model IS NOT NULL
+)
 SELECT
-  e.model,
-  e.variant,
-  e.reasoning,
+  model,
+  variant,
+  reasoning,
+  COUNT(*) AS prompts,
   COUNT(*) AS executions,
-  SUM(CASE WHEN e.result='PASS' THEN 1 ELSE 0 END) AS pass_count,
-  SUM(CASE WHEN e.result='BLOCKED' THEN 1 ELSE 0 END) AS blocked_count,
-  SUM(CASE WHEN e.result='FAIL' THEN 1 ELSE 0 END) AS fail_count,
-  ROUND(1.0 * SUM(CASE WHEN e.result='PASS' THEN 1 ELSE 0 END) / COUNT(*), 4) AS pass_rate,
-  ROUND(AVG(e.total_tokens), 1) AS avg_total_tokens,
-  ROUND(AVG(e.tool_calls), 1) AS avg_tool_calls,
-  ROUND(AVG(e.duration_seconds), 1) AS avg_duration_seconds
-FROM executions e
-GROUP BY e.model, e.variant, e.reasoning;
+  SUM(CASE WHEN result='PASS' THEN 1 ELSE 0 END) AS pass_count,
+  SUM(CASE WHEN result='BLOCKED' THEN 1 ELSE 0 END) AS blocked_count,
+  SUM(CASE WHEN result='FAIL' THEN 1 ELSE 0 END) AS fail_count,
+  ROUND(1.0 * SUM(CASE WHEN result='PASS' THEN 1 ELSE 0 END) / COUNT(*), 4) AS pass_rate,
+  ROUND(AVG(total_tokens), 1) AS avg_total_tokens,
+  ROUND(AVG(tool_calls), 1) AS avg_tool_calls,
+  ROUND(AVG(duration_seconds), 1) AS avg_duration_seconds
+FROM sample
+GROUP BY model, variant, reasoning;
 
 DROP VIEW IF EXISTS v_blockers;
 CREATE VIEW v_blockers AS
