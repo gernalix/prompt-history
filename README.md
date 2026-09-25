@@ -133,13 +133,22 @@ Every ingested source row is deduplicated through `(source, source_key, payload_
 ## Fedora runtime
 
 The derived database is installed at `~/.local/share/prompt-history/prompt_history.sqlite`.
-The user timer `prompt-history-sync.timer` runs `prompt-history-sync.service` about every 15 minutes.
-The versioned units live under `systemd/`. The deployed service reads roadmap and
-codex-usage, all `ChatGPTExport-*` archives below `~/Documents/ChatGPT`, the Session
-Bandit Codex JSONL bridge, and the read-only switcher state database. Passing the parent
-ChatGPT directory is intentional: the adapter discovers one or more normalized exporter
-archives and deduplicates them by canonical source keys. A rebuild removes only the
-derived database and reruns `init` followed by `sync`; no upstream source is changed.
+Versioned units live under `systemd/` and split cheap/frequent work from expensive
+transcript normalization:
+
+- `prompt-history-sync.timer` runs about every 15 minutes and reads roadmap,
+  codex-usage, all `ChatGPTExport-*` archives below `~/Documents/ChatGPT`, and
+  the read-only switcher database. ChatGPT files are content-hash checkpointed, so
+  unchanged conversations are skipped before JSON parsing.
+- `prompt-history-transcripts.timer` runs about hourly and refreshes the much
+  heavier Session Bandit Codex transcript bridge.
+- Both services share one local `flock` so they cannot write the derived SQLite
+  database concurrently.
+
+Passing the parent ChatGPT directory is intentional: the adapter discovers one or more
+normalized exporter archives and deduplicates them by canonical source keys. A rebuild
+removes only the derived database and reruns the configured ingesters; no upstream source
+is changed.
 
 ## Analytics
 
