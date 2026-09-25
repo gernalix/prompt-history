@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import sqlite3
@@ -350,6 +351,44 @@ def _normalized_parts_text(parts: Any) -> str:
     return "\n".join(out).strip()
 
 
+CHATGPT_EXPORTER_INGEST_VERSION = 2
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _chatgpt_exporter_file_seen(
+    conn: sqlite3.Connection,
+    *,
+    source_key: str,
+    digest: str,
+) -> bool:
+    return conn.execute(
+        """SELECT 1 FROM source_records
+           WHERE source='chatgpt-exporter-file' AND source_key=? AND payload_hash=?
+           LIMIT 1""",
+        (source_key, digest),
+    ).fetchone() is not None
+
+
+def _record_chatgpt_exporter_file(
+    conn: sqlite3.Connection,
+    *,
+    source_key: str,
+    digest: str,
+) -> None:
+    conn.execute(
+        """INSERT OR IGNORE INTO source_records(source,source_key,payload_hash,kind,ingested_at)
+           VALUES('chatgpt-exporter-file',?,?, 'file', ?)""",
+        (source_key, digest, utc_now()),
+    )
+
+
 def ingest_chatgpt_exporter_archive(conn: sqlite3.Connection, archive_path: str | Path) -> int:
     """Ingest ChatGPTExporter normalized conversation.json files read-only.
 
@@ -381,6 +420,10 @@ def ingest_chatgpt_exporter_archive(conn: sqlite3.Connection, archive_path: str 
 
     count = 0
     for path in paths:
+        marker_key = f"v{CHATGPT_EXPORTER_INGEST_VERSION}:{path.relative_to(root).as_posix()}"
+        marker_digest = _file_sha256(path)
+        if _chatgpt_exporter_file_seen(conn, source_key=marker_key, digest=marker_digest):
+            continue
         conversation = json.loads(path.read_text(encoding="utf-8"))
         if not isinstance(conversation, dict):
             continue
@@ -454,28 +497,29 @@ def ingest_chatgpt_exporter_archive(conn: sqlite3.Connection, archive_path: str 
     return count
 
 
-def _json_records(path: Path) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
+def _json_records(path: Path) -> Iterator[dict[str, Any]]:
     with path.open("r", encoding="utf-8") as handle:
         first = handle.read(1)
         while first and first.isspace():
             first = handle.read(1)
         if not first:
-            return rows
+            return
         handle.seek(0)
         if first == "[":
             value = json.load(handle)
             if not isinstance(value, list):
                 raise ValueError("expected JSON array")
-            return [row for row in value if isinstance(row, dict)]
+            for row in value:
+                if isinstance(row, dict):
+                    yield row
+            return
         for lineno, line in enumerate(handle, 1):
             if not line.strip():
                 continue
             value = json.loads(line)
             if not isinstance(value, dict):
                 raise ValueError(f"{path}:{lineno}: expected JSON object")
-            rows.append(value)
-    return rows
+            yield value
 
 
 def ingest_session_bandit_export(conn: sqlite3.Connection, input_path: str | Path) -> int:
@@ -562,8 +606,10 @@ def link_explicit_prompt_ids(conn: sqlite3.Connection) -> int:
     rows = conn.execute(
         """SELECT prompt_uid,role,prompt_text,source_key
            FROM prompts
-           WHERE source='chatgpt' AND prompt_text<>''"""
-    ).fetchall()
+           WHERE source='chatgpt'
+             AND prompt_text<>''
+             AND instr(prompt_text, 'PROMPT_ID') > 0"""
+    )
     with conn:
         for row in rows:
             text = str(row["prompt_text"] or "")
