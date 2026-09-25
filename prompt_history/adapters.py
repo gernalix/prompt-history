@@ -329,6 +329,7 @@ def ingest_chatgpt_export(conn: sqlite3.Connection, conversations_path: str | Pa
                     "confidence": 1.0,
                 }
                 count += int(ingest_record(conn, relation))
+
     count += link_explicit_prompt_ids(conn)
     return count
 
@@ -352,6 +353,7 @@ def _normalized_parts_text(parts: Any) -> str:
 
 
 CHATGPT_EXPORTER_INGEST_VERSION = 2
+CHATGPT_EXPORTER_ARCHIVE_MARKER_VERSION = 1
 
 
 def _file_sha256(path: Path) -> str:
@@ -389,6 +391,33 @@ def _record_chatgpt_exporter_file(
     )
 
 
+def _chatgpt_exporter_archive_seen(
+    conn: sqlite3.Connection,
+    *,
+    source_key: str,
+    digest: str,
+) -> bool:
+    return conn.execute(
+        """SELECT 1 FROM source_records
+           WHERE source='chatgpt-exporter-archive' AND source_key=? AND payload_hash=?
+           LIMIT 1""",
+        (source_key, digest),
+    ).fetchone() is not None
+
+
+def _record_chatgpt_exporter_archive(
+    conn: sqlite3.Connection,
+    *,
+    source_key: str,
+    digest: str,
+) -> None:
+    conn.execute(
+        """INSERT OR IGNORE INTO source_records(source,source_key,payload_hash,kind,ingested_at)
+           VALUES('chatgpt-exporter-archive',?,?, 'archive', ?)""",
+        (source_key, digest, utc_now()),
+    )
+
+
 def ingest_chatgpt_exporter_archive(conn: sqlite3.Connection, archive_path: str | Path) -> int:
     """Ingest ChatGPTExporter normalized conversation.json files read-only.
 
@@ -410,9 +439,31 @@ def ingest_chatgpt_exporter_archive(conn: sqlite3.Connection, archive_path: str 
     if not archive_roots:
         raise FileNotFoundError(root / "conversations")
 
+    scan_roots: list[Path] = []
+    archive_markers: dict[Path, tuple[str, str]] = {}
+    for archive_root in archive_roots:
+        manifest = archive_root / "archive.json"
+        if manifest.is_file():
+            marker_key = (
+                f"v{CHATGPT_EXPORTER_ARCHIVE_MARKER_VERSION}:"
+                f"{archive_root.name}"
+            )
+            marker_digest = _file_sha256(manifest)
+            if _chatgpt_exporter_archive_seen(
+                conn,
+                source_key=marker_key,
+                digest=marker_digest,
+            ):
+                continue
+            archive_markers[archive_root] = (marker_key, marker_digest)
+        scan_roots.append(archive_root)
+
+    if not scan_roots:
+        return 0
+
     paths = sorted(
         path
-        for archive_root in archive_roots
+        for archive_root in scan_roots
         for path in (archive_root / "conversations").glob("*/conversation.json")
     )
     if not paths:
@@ -493,6 +544,20 @@ def ingest_chatgpt_exporter_archive(conn: sqlite3.Connection, archive_path: str 
                     "metadata": {"upstream": "siraht/ChatGPTExporter"},
                 }
                 count += int(ingest_record(conn, relation))
+
+            _record_chatgpt_exporter_file(
+                conn,
+                source_key=marker_key,
+                digest=marker_digest,
+            )
+
+    with conn:
+        for archive_marker_key, archive_marker_digest in archive_markers.values():
+            _record_chatgpt_exporter_archive(
+                conn,
+                source_key=archive_marker_key,
+                digest=archive_marker_digest,
+            )
     count += link_explicit_prompt_ids(conn)
     return count
 
