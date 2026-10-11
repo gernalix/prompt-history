@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="it">
+<head><meta charset="utf-8"><title>P53 synthetic fixture</title></head>
+<body>
+  <main id="conversation">
+    <section data-message-author-role="user" data-message-id="u1"><p>Domanda sintetica.</p></section>
+    <section data-message-author-role="assistant" data-message-id="a1">
+      <p>Risposta con <strong>formato</strong>.</p>
+      <button aria-expanded="false" aria-controls="reason-1">Ragionamento</button>
+      <div id="reason-1" data-reasoning-panel hidden><p>Riassunto sintetico uno.</p></div>
+      <pre><code class="language-python">print("synthetic")</code></pre>
+      <ul><li>Voce uno</li><li>Voce due</li></ul>
+      <table><tr><th>Campo</th><th>Valore</th></tr><tr><td>A</td><td>1</td></tr></table>
+      <p><a href="#reference">Riferimento visibile</a></p>
+    </section>
+    <section data-message-author-role="assistant" data-message-id="a2">
+      <p>Seconda risposta.</p>
+      <button aria-expanded="false" aria-controls="reason-2">Reasoning</button>
+    </section>
+    <section data-message-author-role="assistant" data-message-id="a2" aria-hidden="true">
+      <p>Duplicato virtualizzato non visibile.</p>
+    </section>
+  </main>
+  <button id="run">Run isolated P53</button>
+  <pre id="result"></pre>
+  <script src="poc.js"></script>
+  <script>
+    "use strict";
+    const root = document.getElementById("conversation");
+    const toggles = [...root.querySelectorAll("button[aria-expanded]")];
+    toggles[0].addEventListener("click", () => {
+      toggles[0].setAttribute("aria-expanded", "true");
+      document.getElementById("reason-1").hidden = false;
+    });
+    toggles[1].addEventListener("click", () => {
+      toggles[1].setAttribute("aria-expanded", "true");
+      const panel = document.createElement("div");
+      panel.id = "reason-2";
+      panel.dataset.reasoningPanel = "";
+      panel.innerHTML = "<p>Riassunto sintetico due.</p>";
+      toggles[1].after(panel);
+    });
+    window.runP53 = async () => {
+      const expansion = await P53.expandReasoning(root);
+      const markdown = P53.exportMarkdown(root);
+      const result = {expansion, markdown};
+      document.getElementById("result").textContent = JSON.stringify(result, null, 2);
+      return result;
+    };
+    document.getElementById("run").addEventListener("click", window.runP53);
+    const autorun = new URL(location.href).searchParams.get("autorun");
+    if (autorun === "1") window.runP53();
+    if (autorun === "2") (async () => {
+      const first = await window.runP53();
+      const second = await window.runP53();
+      document.getElementById("result").textContent = JSON.stringify({
+        firstExpansion: first.expansion,
+        secondExpansion: second.expansion,
+        markdownStable: first.markdown === second.markdown,
+        markdown: second.markdown,
+      }, null, 2);
+    })();
+  </script>
+</body>
+</html>
