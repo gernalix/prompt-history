@@ -23,6 +23,7 @@ class P53ResearchFixtureTests(unittest.TestCase):
         self.assertIn("<pre><code", self.fixture)
         self.assertIn("<ul>", self.fixture)
         self.assertIn("<table>", self.fixture)
+        self.assertIn("<img", self.fixture)
 
     def test_poc_has_bounds_quiescence_visibility_and_deduplication(self) -> None:
         for required in (
