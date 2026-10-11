@@ -339,6 +339,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
+    from .nv import banner
+    banner()
     args = build_parser().parse_args()
     args.func(args)
 

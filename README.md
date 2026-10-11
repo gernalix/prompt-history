@@ -174,3 +174,13 @@ When a roadmap analysis names a fix prompt and that fix prompt has a recorded PA
 - GitHub CI/PR state
 
 Those remain in their existing repositories and are ingested read-only.
+
+## Project release number
+
+Root `NV.txt` owns the source/runtime release number. Interactive CLI invocations
+show its derived value on stderr, keeping JSON/JSONL stdout unchanged. Services
+and redirected commands emit no banner. Missing or invalid source shows
+`NV unavailable` only interactively. Ordinary commits retain NV; explicit releases
+increment once and reconcile their integrated SHA with MegaVault. Initial adoption
+preserves version 1. The derived evidence database remains independently rebuildable
+and is never an NV source.
