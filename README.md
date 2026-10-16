@@ -227,8 +227,7 @@ rebuilds/validates the external index (VACUUM can change rowids). An exclusive
 SQLite lock covers the migration/compaction/readback; readers can wait during this
 maintenance window. A durable pending marker blocks normal DB access after an
 interrupted maintenance window; rerun `optimize-db` with a new backup path to
-rebuild/check the index and clear that marker. No timer is enabled, disabled or restarted. Code rollback can
-keep schema 2; restoring a backup must be done offline under the same runtime lock,
+rebuild/check the index and clear that marker. No timer is enabled, disabled or restarted. Code rollback must retain support for schema 2 and external FTS; restoring a backup must be done offline under the same runtime lock,
 after preserving any derived records ingested since that backup. Never restore any
 upstream database. Inspect allocation with `db-stats --db PATH`; an empty freelist
 alone is not evidence that message text or provenance may be deleted.

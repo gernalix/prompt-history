@@ -49,13 +49,18 @@ def init_db(conn: sqlite3.Connection) -> None:
     if version is not None and version[0] not in {'1', '2'}:
         raise RuntimeError('unsupported derived database schema version')
     if version is None or version[0] != '2':
-        conn.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
-    if external_fts(conn):
-        install_fts_triggers(conn)
-    if not conn.execute("SELECT 1 FROM meta WHERE key='link_queue_initialized'").fetchone():
-        conn.execute("INSERT OR IGNORE INTO link_pending SELECT prompt_uid FROM prompts WHERE source='chatgpt'")
-        conn.execute("INSERT INTO meta VALUES('link_queue_initialized','1')")
-    conn.commit()
+        try:
+            conn.executescript("BEGIN IMMEDIATE;\n" + SCHEMA_PATH.read_text(encoding="utf-8") + "\nCOMMIT;")
+        except BaseException:
+            conn.rollback()
+            raise
+    from .incremental import atomic
+    with atomic(conn):
+        if external_fts(conn):
+            install_fts_triggers(conn)
+        if not conn.execute("SELECT 1 FROM meta WHERE key='link_queue_initialized'").fetchone():
+            conn.execute("INSERT OR IGNORE INTO link_pending SELECT prompt_uid FROM prompts WHERE source='chatgpt'")
+            conn.execute("INSERT INTO meta VALUES('link_queue_initialized','1')")
 
 
 def prompt_uid_for(record: dict[str, Any]) -> str:
