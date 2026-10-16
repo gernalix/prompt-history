@@ -5,7 +5,7 @@ CREATE TABLE IF NOT EXISTS meta (
   value TEXT NOT NULL
 );
 
-INSERT INTO meta(key, value) VALUES('schema_version', '1')
+INSERT INTO meta(key, value) VALUES('schema_version', '2')
 ON CONFLICT(key) DO UPDATE SET value=excluded.value;
 
 CREATE TABLE IF NOT EXISTS source_records (
@@ -115,6 +115,8 @@ CREATE VIRTUAL TABLE IF NOT EXISTS prompt_fts USING fts5(
   prompt_text,
   repo,
   task_type,
+  content='prompts',
+  content_rowid='rowid',
   tokenize='unicode61 remove_diacritics 2'
 );
 
@@ -201,3 +203,27 @@ SELECT
 FROM executions e
 WHERE e.result='BLOCKED'
 GROUP BY COALESCE(e.blocker_class, 'unclassified');
+
+-- Disposable state belongs to this derived database and is rebuilt with it.
+CREATE TABLE IF NOT EXISTS ingest_checkpoints (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS usage_offsets (
+  index_path TEXT NOT NULL, offset INTEGER NOT NULL, metrics_path TEXT NOT NULL,
+  stamp TEXT, PRIMARY KEY(index_path,offset)
+);
+CREATE TABLE IF NOT EXISTS source_heads (
+  source TEXT NOT NULL, source_key TEXT NOT NULL, kind TEXT NOT NULL,
+  payload_hash TEXT NOT NULL, PRIMARY KEY(source,source_key,kind)
+);
+CREATE TABLE IF NOT EXISTS link_pending (
+  prompt_uid TEXT PRIMARY KEY REFERENCES prompts(prompt_uid) ON DELETE CASCADE
+);
+CREATE TRIGGER IF NOT EXISTS link_prompt_insert AFTER INSERT ON prompts
+WHEN new.source='chatgpt' BEGIN
+  INSERT OR IGNORE INTO link_pending VALUES(new.prompt_uid);
+END;
+CREATE TRIGGER IF NOT EXISTS link_prompt_update AFTER UPDATE ON prompts
+WHEN new.source='chatgpt' AND (old.prompt_hash IS NOT new.prompt_hash
+  OR old.role IS NOT new.role OR old.source_key IS NOT new.source_key
+  OR old.source IS NOT new.source) BEGIN
+  INSERT OR IGNORE INTO link_pending VALUES(new.prompt_uid);
+END;

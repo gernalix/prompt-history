@@ -138,8 +138,11 @@ transcript normalization:
 
 - `prompt-history-sync.timer` runs about every 15 minutes and reads roadmap,
   codex-usage, all `ChatGPTExport-*` archives below `~/Documents/ChatGPT`, and
-  the read-only switcher database. ChatGPT files are content-hash checkpointed, so
-  unchanged conversations are skipped before JSON parsing.
+  the read-only switcher database. Importer checkpoints live in the derived DB.
+  Unchanged files are skipped before parsing; file identity, size, nanosecond mtime
+  and ctime are checked (SQLite inputs include their WAL). Changes invalidate the
+  checkpoint, including replacements, schema changes and retroactive corrections.
+  Exporter manifests alone cannot suppress conversation checks.
 - `prompt-history-transcripts.timer` runs about hourly and refreshes the much
   heavier Session Bandit Codex transcript bridge.
 - Both services share one local `flock` so they cannot write the derived SQLite
@@ -184,3 +187,48 @@ and redirected commands emit no banner. Missing or invalid source shows
 increment once and reconcile their integrated SHA with MegaVault. Initial adoption
 preserves version 1. The derived evidence database remains independently rebuildable
 and is never an NV source.
+
+## Incremental sync and SQLite maintenance
+
+Schema 2 retains every provenance hash and tracks the current source payload,
+so returning to an earlier payload reapplies that version. Importer records and
+checkpoints share a `BEGIN IMMEDIATE` transaction; a changing input or incomplete
+JSONL append rolls that importer back. Codex index appends verify the old prefix
+before seeking from its previous byte offset. A rewrite/truncation/replacement
+rescans the index; every metrics path is stat-checked independently to catch late
+updates. Roadmap materializations stream through a join. ChatGPT linking consumes
+a trigger-backed queue instead of searching all old message bodies on every run.
+A changed SQLite source is still scanned in full: without an upstream change log,
+a timestamp-only row watermark would miss retroactive corrections.
+
+Existing per-conversation content hashes bootstrap the new file checkpoints after
+one verification pass. Subsequent runs stat each conversation/metrics file; they
+do not parse unchanged payloads. These local filesystem checkpoints assume normal
+filesystem ctime/inode semantics; copies/restores and replacements invalidate them.
+Full reconstruction remains explicit: create a separate empty derived DB and rerun
+the same importers. Source deletion/truncation retains prior provenance and evidence;
+it does not authorize erasing historical records. A fresh rebuild reflects only the
+inputs still available, so reproducing historical versions requires those archives.
+
+New databases use external-content FTS5 over `prompts`, with transactional triggers.
+Existing databases keep their legacy FTS until this explicit maintenance command:
+
+```bash
+flock -w 120 ~/.local/state/prompt-history/sync.lock \
+  python3 -m prompt_history.cli optimize-db \
+    --db ~/.local/share/prompt-history/prompt_history.sqlite \
+    --backup /absolute/private/existing-directory/pre-optimization.sqlite
+```
+
+The backup path must not exist. Maintenance checks free space, SQLite integrity
+and foreign keys, makes a coherent mode-0600 SQLite backup and verifies it before
+migration. It removes only the duplicate FTS content store, compacts the DB and
+rebuilds/validates the external index (VACUUM can change rowids). An exclusive
+SQLite lock covers the migration/compaction/readback; readers can wait during this
+maintenance window. A durable pending marker blocks normal DB access after an
+interrupted maintenance window; rerun `optimize-db` with a new backup path to
+rebuild/check the index and clear that marker. No timer is enabled, disabled or restarted. Code rollback can
+keep schema 2; restoring a backup must be done offline under the same runtime lock,
+after preserving any derived records ingested since that backup. Never restore any
+upstream database. Inspect allocation with `db-stats --db PATH`; an empty freelist
+alone is not evidence that message text or provenance may be deleted.

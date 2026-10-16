@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from .store import ingest_record, ingest_records, prompt_uid_for, utc_now
+from .incremental import atomic, checkpointed, get, put, stamp, transactional as _transactional
 
 
 def _variant(model: str | None) -> str | None:
@@ -66,24 +67,23 @@ def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
     ).fetchone() is not None
 
 
+@checkpointed(sqlite=True)
 def ingest_roadmap(conn: sqlite3.Connection, roadmap_path: str | Path) -> int:
     path = Path(roadmap_path).expanduser().resolve()
     src = sqlite3.connect(f"{path.as_uri()}?mode=ro", uri=True)
     src.row_factory = sqlite3.Row
     count = 0
     try:
-        materializations: dict[str, str] = {}
-        if _table_exists(src, "prompt_materializations"):
-            materializations = {
-                str(row["prompt_id"]): str(row["body"])
-                for row in src.execute("SELECT prompt_id,body FROM prompt_materializations")
-            }
-
-        with conn:
-            for row in src.execute("SELECT * FROM prompts"):
+        query = ("SELECT p.*,m.body AS materialized_body FROM prompts p "
+                 "LEFT JOIN prompt_materializations m USING(prompt_id)"
+                 if _table_exists(src, "prompt_materializations") else
+                 "SELECT p.*,NULL AS materialized_body FROM prompts p")
+        with atomic(conn):
+            for row in src.execute(query):
                 item = dict(row)
+                materialized = item.pop("materialized_body")
                 prompt_id = str(item["prompt_id"])
-                body = materializations.get(prompt_id) or ""
+                body = materialized or ""
                 if not body:
                     body = "\n\n".join(
                         x for x in [str(item.get("title") or ""), str(item.get("explanation") or "")]
@@ -96,7 +96,7 @@ def ingest_roadmap(conn: sqlite3.Connection, roadmap_path: str | Path) -> int:
                     "prompt_id": prompt_id,
                     "title": item.get("title"),
                     "prompt_text": body,
-                    "text_quality": 100 if prompt_id in materializations else 65,
+                    "text_quality": 100 if materialized is not None else 65,
                     "project_id": item.get("project_id"),
                     "repo": item.get("repo"),
                     "task_type": item.get("prompt_type"),
@@ -258,6 +258,7 @@ def _iso_from_epoch(value: Any) -> str | None:
         return None
 
 
+@checkpointed(sqlite=False)
 def ingest_chatgpt_export(conn: sqlite3.Connection, conversations_path: str | Path) -> int:
     path = Path(conversations_path).expanduser()
     conversations = json.loads(path.read_text(encoding="utf-8"))
@@ -265,7 +266,7 @@ def ingest_chatgpt_export(conn: sqlite3.Connection, conversations_path: str | Pa
         raise ValueError("ChatGPT conversations export must be a JSON list")
 
     count = 0
-    with conn:
+    with atomic(conn):
         for index, conversation in enumerate(conversations):
             if not isinstance(conversation, dict):
                 continue
@@ -370,12 +371,12 @@ def _chatgpt_exporter_file_seen(
     source_key: str,
     digest: str,
 ) -> bool:
-    return conn.execute(
-        """SELECT 1 FROM source_records
-           WHERE source='chatgpt-exporter-file' AND source_key=? AND payload_hash=?
-           LIMIT 1""",
-        (source_key, digest),
-    ).fetchone() is not None
+    row = conn.execute(
+        """SELECT payload_hash FROM source_records
+           WHERE source='chatgpt-exporter-file' AND source_key=?
+           ORDER BY rowid DESC LIMIT 1""", (source_key,),
+    ).fetchone()
+    return row is not None and row[0] == digest
 
 
 def _record_chatgpt_exporter_file(
@@ -418,6 +419,7 @@ def _record_chatgpt_exporter_archive(
     )
 
 
+@_transactional
 def ingest_chatgpt_exporter_archive(conn: sqlite3.Connection, archive_path: str | Path) -> int:
     """Ingest ChatGPTExporter normalized conversation.json files read-only.
 
@@ -425,7 +427,7 @@ def ingest_chatgpt_exporter_archive(conn: sqlite3.Connection, archive_path: str 
     adapter deliberately consumes its stable normalized archive instead of
     reimplementing private ChatGPT Web endpoints here.
     """
-    root = Path(archive_path).expanduser()
+    root = Path(archive_path).expanduser().resolve()
     if (root / "conversations").is_dir():
         archive_roots = [root]
     elif root.is_dir():
@@ -439,31 +441,8 @@ def ingest_chatgpt_exporter_archive(conn: sqlite3.Connection, archive_path: str 
     if not archive_roots:
         raise FileNotFoundError(root / "conversations")
 
-    scan_roots: list[Path] = []
-    archive_markers: dict[Path, tuple[str, str]] = {}
-    for archive_root in archive_roots:
-        manifest = archive_root / "archive.json"
-        if manifest.is_file():
-            marker_key = (
-                f"v{CHATGPT_EXPORTER_ARCHIVE_MARKER_VERSION}:"
-                f"{archive_root.name}"
-            )
-            marker_digest = _file_sha256(manifest)
-            if _chatgpt_exporter_archive_seen(
-                conn,
-                source_key=marker_key,
-                digest=marker_digest,
-            ):
-                continue
-            archive_markers[archive_root] = (marker_key, marker_digest)
-        scan_roots.append(archive_root)
-
-    if not scan_roots:
-        return 0
-
     paths = sorted(
-        path
-        for archive_root in scan_roots
+        path for archive_root in archive_roots
         for path in (archive_root / "conversations").glob("*/conversation.json")
     )
     if not paths:
@@ -472,8 +451,18 @@ def ingest_chatgpt_exporter_archive(conn: sqlite3.Connection, archive_path: str 
     count = 0
     for path in paths:
         marker_key = f"v{CHATGPT_EXPORTER_INGEST_VERSION}:{path.relative_to(root).as_posix()}"
+        checkpoint_key = f"v3:exporter:{path}"
+        before = stamp(path)
+        if get(conn, checkpoint_key) == before:
+            continue
         marker_digest = _file_sha256(path)
-        if _chatgpt_exporter_file_seen(conn, source_key=marker_key, digest=marker_digest):
+        # Upgrade a historical per-file checkpoint only after verifying its
+        # current bytes. Never use an archive-wide manifest as that evidence.
+        if get(conn, checkpoint_key) is None and _chatgpt_exporter_file_seen(
+                conn, source_key=marker_key, digest=marker_digest):
+            if stamp(path) != before:
+                raise RuntimeError(f"input changed during ingestion: {path}")
+            put(conn, checkpoint_key, before)
             continue
         conversation = json.loads(path.read_text(encoding="utf-8"))
         if not isinstance(conversation, dict):
@@ -490,7 +479,7 @@ def ingest_chatgpt_exporter_archive(conn: sqlite3.Connection, archive_path: str 
 
         uid_by_node: dict[str, str] = {}
         pending_relations: list[tuple[str, str]] = []
-        with conn:
+        with atomic(conn):
             for index, message in enumerate(messages):
                 if not isinstance(message, dict):
                     continue
@@ -545,19 +534,15 @@ def ingest_chatgpt_exporter_archive(conn: sqlite3.Connection, archive_path: str 
                 }
                 count += int(ingest_record(conn, relation))
 
+            if stamp(path) != before:
+                raise RuntimeError(f"input changed during ingestion: {path}")
+            put(conn, checkpoint_key, before)
             _record_chatgpt_exporter_file(
                 conn,
                 source_key=marker_key,
                 digest=marker_digest,
             )
 
-    with conn:
-        for archive_marker_key, archive_marker_digest in archive_markers.values():
-            _record_chatgpt_exporter_archive(
-                conn,
-                source_key=archive_marker_key,
-                digest=archive_marker_digest,
-            )
     count += link_explicit_prompt_ids(conn)
     return count
 
@@ -587,6 +572,7 @@ def _json_records(path: Path) -> Iterator[dict[str, Any]]:
             yield value
 
 
+@checkpointed(sqlite=False)
 def ingest_session_bandit_export(conn: sqlite3.Connection, input_path: str | Path) -> int:
     """Ingest normalized Codex sessions emitted by @session-bandit/core.
 
@@ -599,7 +585,7 @@ def ingest_session_bandit_export(conn: sqlite3.Connection, input_path: str | Pat
     sessions = _json_records(path)
     count = 0
 
-    with conn:
+    with atomic(conn):
         for session in sessions:
             if session.get("agent") != "codex":
                 continue
@@ -665,17 +651,16 @@ def ingest_session_bandit_export(conn: sqlite3.Connection, input_path: str | Pat
                 previous_uid = uid
     return count
 
+@_transactional
 def link_explicit_prompt_ids(conn: sqlite3.Connection) -> int:
     """Create only deterministic links backed by literal PROMPT_ID markers."""
     count = 0
     rows = conn.execute(
-        """SELECT prompt_uid,role,prompt_text,source_key
-           FROM prompts
-           WHERE source='chatgpt'
-             AND prompt_text<>''
-             AND instr(prompt_text, 'PROMPT_ID') > 0"""
+        """SELECT p.prompt_uid,p.role,p.prompt_text,p.source_key
+           FROM link_pending q CROSS JOIN prompts p ON p.prompt_uid=q.prompt_uid
+           WHERE p.source='chatgpt'"""
     )
-    with conn:
+    with atomic(conn):
         for row in rows:
             text = str(row["prompt_text"] or "")
             ids = list(dict.fromkeys(re.findall(r"(?<!PARENT_)PROMPT_ID\s*=\s*(\d{6})", text)))
@@ -707,9 +692,12 @@ def link_explicit_prompt_ids(conn: sqlite3.Connection) -> int:
                     "metadata": {"evidence": "literal PARENT_PROMPT_ID + PROMPT_ID markers"},
                 }
                 count += int(ingest_record(conn, record))
+            conn.execute("DELETE FROM link_pending WHERE prompt_uid=?", (row["prompt_uid"],))
+
     return count
 
 
+@_transactional
 def ingest_codex_usage(conn: sqlite3.Connection, repo_path: str | Path) -> int:
     root = Path(repo_path).expanduser()
     index_path = root / "index" / "prompts.jsonl"
@@ -717,15 +705,9 @@ def ingest_codex_usage(conn: sqlite3.Connection, repo_path: str | Path) -> int:
         raise FileNotFoundError(index_path)
 
     count = 0
-    with conn:
-        for index_record in _read_jsonl(index_path):
-            rel_path = index_record.get("path")
-            if not rel_path:
-                continue
-            metrics_path = root / str(rel_path) / "metrics.json"
-            metrics: dict[str, Any] = {}
-            if metrics_path.is_file():
-                metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
+    with atomic(conn):
+        for index_record, metrics in _usage_changes(conn, root, index_path):
+            rel_path = index_record["path"]
             merged = {**index_record, **metrics}
             prompt_id = merged.get("prompt_id")
             cycle_key = str(merged.get("cycle_key") or Path(str(rel_path)).name)
@@ -785,6 +767,7 @@ def ingest_codex_usage(conn: sqlite3.Connection, repo_path: str | Path) -> int:
     return count
 
 
+@checkpointed(sqlite=True)
 def ingest_switcher(conn: sqlite3.Connection, db_path: str | Path) -> int:
     """Read stable prompt bindings and browser contexts without mutating switcher state."""
     src = sqlite3.connect(f"file:{Path(db_path).expanduser().resolve()}?mode=ro", uri=True)
@@ -792,7 +775,7 @@ def ingest_switcher(conn: sqlite3.Connection, db_path: str | Path) -> int:
     count = 0
     try:
         contexts = {r["id"]: dict(r) for r in src.execute("SELECT * FROM contexts")}
-        with conn:
+        with atomic(conn):
             for row in src.execute("SELECT * FROM prompt_bindings"):
                 item = dict(row)
                 pid = str(item["prompt_id"])
@@ -817,3 +800,71 @@ def ingest_switcher(conn: sqlite3.Connection, db_path: str | Path) -> int:
     finally:
         src.close()
     return count
+
+
+def _usage_changes(conn, root: Path, index: Path):
+    """Offsets reference the original index; no second copy of its payloads.
+
+    Append fast path verifies every old byte before seeking. Rewrites and
+    replacements invalidate offsets; metrics are checked independently on every
+    run because a completed cycle may receive revised metrics later.
+    """
+    root = root.resolve()
+    index = index.resolve()
+    key = f'v1:usage:{index}'
+    before = stamp(index)
+    saved = get(conn, key)
+    state = json.loads(saved) if saved else {}
+    with index.open('rb') as handle:
+        if state.get('stamp') != before:
+            offset = 0
+            old_size = state.get('size', 0)
+            digest = hashlib.sha256()
+            if old_size and json.loads(before)[0][:2] == json.loads(state['stamp'])[0][:2]:
+                remaining = old_size
+                while remaining:
+                    chunk = handle.read(min(1024 * 1024, remaining))
+                    if not chunk:
+                        break
+                    digest.update(chunk)
+                    remaining -= len(chunk)
+                if not remaining and digest.hexdigest() == state.get('digest'):
+                    offset = old_size
+            if not offset:
+                conn.execute('DELETE FROM usage_offsets WHERE index_path=?', (str(index),))
+                digest = hashlib.sha256()
+            handle.seek(offset)
+            while True:
+                start = handle.tell()
+                line = handle.readline()
+                if not line:
+                    break
+                if not line.endswith(b'\n'):
+                    raise ValueError(f'incomplete JSONL record: {index}')
+                digest.update(line)
+                if not line.strip():
+                    continue
+                record = json.loads(line)
+                if record.get('path'):
+                    metrics = root / str(record['path']) / 'metrics.json'
+                    conn.execute('INSERT INTO usage_offsets(index_path,offset,metrics_path) VALUES(?,?,?)',
+                                 (str(index), start, str(metrics)))
+            state = dict(stamp=before, size=handle.tell(), digest=digest.hexdigest())
+        # Fetch offsets only: never materialize the metric bodies.
+        for row in conn.execute('SELECT offset,metrics_path,stamp FROM usage_offsets '
+                                'WHERE index_path=? ORDER BY offset', (str(index),)).fetchall():
+            path = Path(row['metrics_path'])
+            metric_stamp = stamp(path)
+            if row['stamp'] == metric_stamp:
+                continue
+            handle.seek(row['offset'])
+            record = json.loads(handle.readline())
+            metrics = json.loads(path.read_text(encoding='utf-8')) if path.is_file() else {}
+            yield record, metrics
+            if stamp(path) != metric_stamp:
+                raise RuntimeError(f'input changed during ingestion: {path}')
+            conn.execute('UPDATE usage_offsets SET stamp=? WHERE index_path=? AND offset=?',
+                         (metric_stamp, str(index), row['offset']))
+    if stamp(index) != before:
+        raise RuntimeError(f'input changed during ingestion: {index}')
+    put(conn, key, json.dumps(state, separators=(',', ':')))
