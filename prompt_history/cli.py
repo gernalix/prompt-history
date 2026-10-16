@@ -258,6 +258,22 @@ def cmd_blockers(args: argparse.Namespace) -> None:
         conn.close()
 
 
+def cmd_db_stats(args):
+    from .maintenance import db_stats
+    path = Path(args.db).expanduser().resolve()
+    conn = sqlite3.connect(f"{path.as_uri()}?mode=ro", uri=True)
+    conn.row_factory = sqlite3.Row
+    try:
+        print(json.dumps(db_stats(conn), sort_keys=True))
+    finally:
+        conn.close()
+
+
+def cmd_optimize_db(args):
+    from .maintenance import optimize
+    print(json.dumps(optimize(args.db, args.backup), sort_keys=True))
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="prompt-history")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -330,6 +346,15 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--session-bandit")
     p.add_argument("--switcher")
     p.set_defaults(func=cmd_sync)
+
+    p = sub.add_parser("db-stats")
+    p.add_argument("--db", required=True)
+    p.set_defaults(func=cmd_db_stats)
+
+    p = sub.add_parser("optimize-db")
+    p.add_argument("--db", required=True)
+    p.add_argument("--backup", required=True)
+    p.set_defaults(func=cmd_optimize_db)
 
     p = sub.add_parser("blockers")
     p.add_argument("--db", required=True)

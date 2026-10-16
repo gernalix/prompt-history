@@ -29,18 +29,38 @@ def text_hash(value: str) -> str:
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
-def connect(path: str | Path) -> sqlite3.Connection:
+def connect(path: str | Path, *, maintenance: bool = False) -> sqlite3.Connection:
     db_path = Path(path).expanduser()
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys=ON")
+    if not maintenance and conn.execute("SELECT 1 FROM sqlite_master WHERE name='meta'").fetchone():
+        pending = conn.execute("SELECT value FROM meta WHERE key='fts_rebuild_pending'").fetchone()
+        if pending and pending[0] == '1':
+            conn.close()
+            raise RuntimeError('incomplete SQLite maintenance; rerun optimize-db with a new backup path')
     return conn
 
 
 def init_db(conn: sqlite3.Connection) -> None:
-    conn.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
-    conn.commit()
+    has_meta = conn.execute("SELECT 1 FROM sqlite_master WHERE name='meta'").fetchone()
+    version = conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone() if has_meta else None
+    if version is not None and version[0] not in {'1', '2'}:
+        raise RuntimeError('unsupported derived database schema version')
+    if version is None or version[0] != '2':
+        try:
+            conn.executescript("BEGIN IMMEDIATE;\n" + SCHEMA_PATH.read_text(encoding="utf-8") + "\nCOMMIT;")
+        except BaseException:
+            conn.rollback()
+            raise
+    from .incremental import atomic
+    with atomic(conn):
+        if external_fts(conn):
+            install_fts_triggers(conn)
+        if not conn.execute("SELECT 1 FROM meta WHERE key='link_queue_initialized'").fetchone():
+            conn.execute("INSERT OR IGNORE INTO link_pending SELECT prompt_uid FROM prompts WHERE source='chatgpt'")
+            conn.execute("INSERT INTO meta VALUES('link_queue_initialized','1')")
 
 
 def prompt_uid_for(record: dict[str, Any]) -> str:
@@ -72,15 +92,30 @@ def record_source(conn: sqlite3.Connection, record: dict[str, Any]) -> bool:
     source = str(record.get("source") or "unknown")
     source_key = str(record.get("source_key") or payload_hash(record)[:24])
     digest = payload_hash(record)
+    kind = str(record.get("kind") or "unknown")
+    current = conn.execute("SELECT payload_hash FROM source_heads WHERE source=? AND source_key=? AND kind=?",
+                           (source, source_key, kind)).fetchone()
+    if current and current[0] == digest:
+        return False
     cur = conn.execute(
         """INSERT OR IGNORE INTO source_records(source,source_key,payload_hash,kind,ingested_at)
            VALUES(?,?,?,?,?)""",
         (source, source_key, digest, str(record.get("kind") or "unknown"), utc_now()),
     )
-    return cur.rowcount > 0
+    conn.execute("INSERT INTO source_heads VALUES(?,?,?,?) ON CONFLICT(source,source_key,kind) "
+                 "DO UPDATE SET payload_hash=excluded.payload_hash", (source, source_key, kind, digest))
+    # Bootstrap old warehouses without replaying their already applied current
+    # version over higher-quality evidence supplied by another source.
+    if current is None and cur.rowcount == 0:
+        latest = conn.execute("SELECT payload_hash FROM source_records WHERE source=? AND source_key=? "
+                              "AND kind=? ORDER BY rowid DESC LIMIT 1", (source, source_key, kind)).fetchone()
+        return latest is not None and latest[0] != digest
+    return True
 
 
 def _refresh_fts(conn: sqlite3.Connection, prompt_uid: str) -> None:
+    if external_fts(conn):
+        return  # The external index is maintained atomically by triggers.
     row = conn.execute(
         "SELECT prompt_uid,title,prompt_text,repo,task_type FROM prompts WHERE prompt_uid=?",
         (prompt_uid,),
@@ -345,3 +380,43 @@ def ingest_records(conn: sqlite3.Connection, records: Iterable[dict[str, Any]]) 
         for record in records:
             count += int(ingest_record(conn, record))
     return count
+
+
+def external_fts(conn: sqlite3.Connection) -> bool:
+    row = conn.execute("SELECT sql FROM sqlite_master WHERE name='prompt_fts'").fetchone()
+    return row is not None and "content='prompts'" in row[0]
+
+
+def install_fts_triggers(conn: sqlite3.Connection) -> None:
+    conn.execute("""CREATE TRIGGER IF NOT EXISTS prompt_fts_insert AFTER INSERT ON prompts BEGIN
+        INSERT INTO prompt_fts(rowid,prompt_uid,title,prompt_text,repo,task_type)
+        VALUES(new.rowid,new.prompt_uid,new.title,new.prompt_text,new.repo,new.task_type);
+        END""")
+    conn.execute("""CREATE TRIGGER IF NOT EXISTS prompt_fts_delete AFTER DELETE ON prompts BEGIN
+        INSERT INTO prompt_fts(prompt_fts,rowid,prompt_uid,title,prompt_text,repo,task_type)
+        VALUES('delete',old.rowid,old.prompt_uid,old.title,old.prompt_text,old.repo,old.task_type);
+        END""")
+    conn.execute("""CREATE TRIGGER IF NOT EXISTS prompt_fts_update AFTER UPDATE ON prompts
+        WHEN old.title IS NOT new.title OR old.prompt_text IS NOT new.prompt_text
+          OR old.repo IS NOT new.repo OR old.task_type IS NOT new.task_type BEGIN
+        INSERT INTO prompt_fts(prompt_fts,rowid,prompt_uid,title,prompt_text,repo,task_type)
+        VALUES('delete',old.rowid,old.prompt_uid,old.title,old.prompt_text,old.repo,old.task_type);
+        INSERT INTO prompt_fts(rowid,prompt_uid,title,prompt_text,repo,task_type)
+        VALUES(new.rowid,new.prompt_uid,new.title,new.prompt_text,new.repo,new.task_type);
+        END""")
+
+
+def migrate_fts(conn: sqlite3.Connection) -> bool:
+    """Caller owns verified backup, free-space gate and exclusive runtime lock."""
+    from .incremental import atomic
+    if external_fts(conn):
+        return False
+    with atomic(conn):
+        conn.execute('DROP TABLE prompt_fts')
+        conn.execute("""CREATE VIRTUAL TABLE prompt_fts USING fts5(
+            prompt_uid UNINDEXED,title,prompt_text,repo,task_type,
+            content='prompts',content_rowid='rowid',tokenize='unicode61 remove_diacritics 2')""")
+        conn.execute("INSERT INTO prompt_fts(prompt_fts) VALUES('rebuild')")
+        conn.execute("INSERT INTO prompt_fts(prompt_fts,rank) VALUES('integrity-check',1)")
+        install_fts_triggers(conn)
+    return True

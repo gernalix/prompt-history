@@ -187,7 +187,7 @@ class AdapterTests(unittest.TestCase):
             2,
         )
 
-    def test_chatgpt_exporter_manifest_skips_unchanged_workspace_without_hashing_conversations(self) -> None:
+    def test_chatgpt_exporter_stats_skip_unchanged_files_without_hashing(self) -> None:
         archive = self.root / "ChatGPTExport-fast"
         conv_dir = archive / "conversations" / "conv-fast"
         conv_dir.mkdir(parents=True)
@@ -226,8 +226,8 @@ class AdapterTests(unittest.TestCase):
 
         self.assertGreater(first, 0)
         self.assertEqual(second, 0)
-        self.assertGreaterEqual(first_calls, 2)
-        self.assertEqual(second_calls, 1)
+        self.assertEqual(first_calls, 1)
+        self.assertEqual(second_calls, 0)
 
     def test_session_bandit_ingests_codex_transcript_without_execution_duplication(self) -> None:
         path = self.root / "session-bandit.jsonl"
