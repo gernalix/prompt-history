@@ -11,7 +11,7 @@ const profile = mkdtempSync(join(tmpdir(), "p54-chrome-"));
 const chrome = spawn("/usr/bin/google-chrome", [
   "--headless=new", "--no-first-run", "--disable-gpu", "--remote-debugging-port=0",
   `--user-data-dir=${profile}`, url
-], {stdio: "ignore"});
+], {stdio: "ignore", detached: true});
 
 async function waitForPort() {
   const path = join(profile, "DevToolsActivePort");
@@ -76,10 +76,24 @@ try {
   const result = await evaluate(page.webSocketDebuggerUrl, expression);
   process.stdout.write(`${JSON.stringify(result)}\n`);
 } finally {
-  chrome.kill("SIGTERM");
+  const exited = chrome.exitCode !== null ? Promise.resolve() :
+    new Promise((resolve) => chrome.once("exit", resolve));
+  try {
+    process.kill(-chrome.pid, "SIGTERM");
+  } catch (_) {
+    chrome.kill("SIGTERM");
+  }
   await Promise.race([
-    new Promise((resolve) => chrome.once("exit", resolve)),
+    exited,
     delay(2000)
   ]);
-  rmSync(profile, {recursive: true, force: true});
+  if (chrome.exitCode === null) {
+    try {
+      process.kill(-chrome.pid, "SIGKILL");
+    } catch (_) {
+      chrome.kill("SIGKILL");
+    }
+  }
+  await delay(100);
+  rmSync(profile, {recursive: true, force: true, maxRetries: 10, retryDelay: 100});
 }
