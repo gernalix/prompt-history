@@ -1,0 +1,14 @@
+{
+  "manifest_version": 3,
+  "name": "ChatGPT Passive DOM Export",
+  "version": "1.0.0",
+  "description": "Captures only ChatGPT content already rendered in the user-selected tab and exports local Markdown and JSON files.",
+  "permissions": ["activeTab", "scripting", "storage"],
+  "action": {
+    "default_title": "ChatGPT Passive DOM Export",
+    "default_popup": "popup.html"
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'"
+  }
+}

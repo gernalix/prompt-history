@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="it">
+<head><meta charset="utf-8"><title>P54 fixture sintetica</title></head>
+<body>
+  <main id="conversation">
+    <article data-message-author-role="user" data-message-id="u1"><p>Domanda sintetica.</p></article>
+    <article data-message-author-role="assistant" data-message-id="a1">
+      <p>Risposta <strong>sintetica</strong>.</p>
+      <button id="reason-toggle" aria-expanded="false" aria-controls="reason">Ragionamento</button>
+      <section id="reason" hidden><p>Passaggio visualizzato.</p></section>
+      <pre><code class="language-python">print("fixture")</code></pre>
+      <ul><li>Uno</li><li>Due</li></ul>
+      <table><tr><th>Campo</th><th>Valore</th></tr><tr><td>A</td><td>1</td></tr></table>
+      <blockquote>Citazione sintetica</blockquote>
+      <p><img alt="Media sintetico" data-src="/never-requested.png"></p>
+    </article>
+  </main>
+  <script src="/extension/core.js"></script>
+  <script src="/fixture.js"></script>
+</body>
+</html>
