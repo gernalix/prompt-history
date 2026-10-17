@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>ChatGPT Passive DOM Export</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <main>
+    <h1>Esportazione passiva</h1>
+    <p id="status" role="status">Seleziona una scheda ChatGPT.</p>
+    <dl>
+      <div><dt>Chat</dt><dd id="chat-count">0</dd></div>
+      <div><dt>Messaggi</dt><dd id="turn-count">0</dd></div>
+      <div><dt>Versioni</dt><dd id="version-count">0</dd></div>
+    </dl>
+    <div class="actions">
+      <button id="start">Avvia cattura</button>
+      <button id="stop" disabled>Interrompi</button>
+      <button id="export" disabled>Esporta Markdown + JSON</button>
+      <button id="clear" class="danger">Elimina catture locali</button>
+    </div>
+    <p class="hint">Apri e scorri manualmente i pannelli che vuoi includere. L’estensione non clicca, non scorre e non recupera contenuti mancanti.</p>
+    <p class="warning">Prima dell’uso reale leggi la nota sui termini OpenAI nel README: l’assenza di traffico non rende automaticamente autorizzata l’estrazione programmatica.</p>
+  </main>
+  <script src="popup.js"></script>
+</body>
+</html>
