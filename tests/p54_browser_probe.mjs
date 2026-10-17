@@ -11,22 +11,27 @@ const profile = mkdtempSync(join(tmpdir(), "p54-chrome-"));
 const chrome = spawn("/usr/bin/google-chrome", [
   "--headless=new", "--no-first-run", "--disable-gpu", "--remote-debugging-port=0",
   `--user-data-dir=${profile}`, url
-], {stdio: "ignore", detached: true});
+], {stdio: ["ignore", "ignore", "pipe"], detached: true});
+let chromeStderr = "";
+chrome.stderr.on("data", (chunk) => {
+  chromeStderr = (chromeStderr + chunk.toString()).slice(-4000);
+});
 
 async function waitForPort() {
   const path = join(profile, "DevToolsActivePort");
-  for (let attempt = 0; attempt < 100; attempt += 1) {
+  for (let attempt = 0; attempt < 500; attempt += 1) {
     try {
       return readFileSync(path, "utf8").split("\n")[0];
     } catch (_) {
+      if (chrome.exitCode !== null) break;
       await delay(20);
     }
   }
-  throw new Error("Chrome DevTools port was not created");
+  throw new Error(`Chrome DevTools port was not created: ${chromeStderr}`);
 }
 
 async function waitForPage(port) {
-  for (let attempt = 0; attempt < 100; attempt += 1) {
+  for (let attempt = 0; attempt < 500; attempt += 1) {
     const targets = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
     const page = targets.find((target) => target.type === "page" && target.url.startsWith(url));
     if (page) return page;
