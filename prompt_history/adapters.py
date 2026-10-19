@@ -249,10 +249,10 @@ def _iso_from_epoch(value: Any) -> str | None:
     if not isinstance(value, (int, float)):
         return None
     from datetime import datetime, timezone
-    seconds = float(value)
-    if abs(seconds) >= 100_000_000_000:
-        seconds /= 1000.0
     try:
+        seconds = float(value)
+        if abs(seconds) >= 100_000_000_000:
+            seconds /= 1000.0
         return datetime.fromtimestamp(seconds, tz=timezone.utc).isoformat().replace("+00:00", "Z")
     except (OverflowError, OSError, ValueError):
         return None

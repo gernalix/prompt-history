@@ -68,6 +68,48 @@ class AdapterTests(unittest.TestCase):
         relation = self.conn.execute("SELECT relation_type FROM relations").fetchone()[0]
         self.assertEqual(relation, "conversation_parent")
 
+    def test_unrepresentable_integer_timestamp_preserves_full_conversation(self) -> None:
+        path = self.root / "oversized-timestamps.json"
+        huge = 10**1000
+        entries = [
+            ("positive", "user", huge, None),
+            ("negative", "assistant", -huge, "positive"),
+            ("valid", "user", 1_790_000_000_000, "negative"),
+        ]
+        path.write_text(json.dumps([{
+            "id": "oversized",
+            "mapping": {
+                name: {
+                    "parent": parent,
+                    "message": {
+                        "id": name,
+                        "author": {"role": role},
+                        "content": {"parts": ["keep " + name]},
+                        "create_time": timestamp,
+                    },
+                }
+                for name, role, timestamp, parent in entries
+            },
+        }]), encoding="utf-8")
+        original = path.read_bytes()
+
+        self.assertGreater(ingest_chatgpt_export(self.conn, path), 0)
+        rows = {
+            row["message_id"]: (row["prompt_text"], row["created_at"])
+            for row in self.conn.execute(
+                "SELECT message_id,prompt_text,created_at FROM prompts WHERE source='chatgpt'"
+            )
+        }
+        self.assertEqual(rows, {
+            "positive": ("keep positive", None),
+            "negative": ("keep negative", None),
+            "valid": ("keep valid", "2026-09-21T14:13:20Z"),
+        })
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM relations").fetchone()[0], 2)
+        self.assertEqual(ingest_chatgpt_export(self.conn, path), 0)
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM prompts").fetchone()[0], 3)
+        self.assertEqual(path.read_bytes(), original)
+
     def test_explicit_prompt_ids_link_chatgpt_to_codex(self) -> None:
         path = self.root / "links.json"
         path.write_text(json.dumps([{
