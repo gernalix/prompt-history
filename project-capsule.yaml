@@ -1,0 +1,264 @@
+schema_version: c2.project-capsule.v1
+identity:
+  project_id: 103
+  slug: prompt-history
+  repository_id: R0104
+scope:
+  purpose: Maintain a derived, rebuildable prompt-evidence warehouse with deterministic
+    provenance, without mutating canonical inputs.
+  boundaries:
+  - No network ingestion or canonical source mutations are authorized by capsule verification.
+  - Historical Pn/C2 data are archive inputs only; do not activate lifecycle dispatchers.
+repository:
+  canonical_workdir: /home/daniele/projects/prompt-history
+  branch_policy: Use isolated task worktrees and the installed single writer; protect
+    the current primary branch and preserve all valid work.
+architecture:
+  summary: store.py owns normalized entities and SQLite/FTS persistence; adapters.py
+    and chatgpt_adapters.py own input normalization with a tested public compatibility
+    boundary. incremental.py tracks source fingerprints/checkpoints; maintenance.py
+    owns guarded derived-store maintenance. cli.py composes these modules. Browser
+    extension/research capture remains explicit and separately bounded.
+  entrypoints:
+  - prompt_history/cli.py
+  important_paths:
+  - prompt_history
+  - schema/prompt_evidence.sql
+  - queries
+  - extension
+  - research
+  - tests
+  - README.md
+dependencies:
+- name: Python standard library and system SQLite
+  purpose: Offline policy, data and fixture verification.
+- name: Bubblewrap
+  purpose: Read-only source with private temporary home/runtime/data, isolated processes
+    and network.
+- name: Node and installed Chrome
+  purpose: Synthetic local extension capture probe inside the isolated namespace;
+    no real browser profile or provider requests.
+data:
+  schema: Derived SQLite stores prompts, executions, relations, artifacts, immutable
+    source_records and prompt_fts. schema/prompt_evidence.sql is the schema reference.
+    Native exports and source lifecycle/history remain canonical; analyses preserve
+    provenance and report sample counts.
+  migrations: Use owning store/maintenance APIs, consistent SQLite backup and source
+    checkpoints. Rebuild only the derived warehouse; never rewrite canonical source
+    history or outcomes to fit later conclusions.
+runtime:
+  services:
+  - prompt-history-sync.service
+  - prompt-history-transcripts.service
+  timers:
+  - prompt-history-sync.timer
+  - prompt-history-transcripts.timer
+  containers: []
+devices: []
+commands:
+  setup:
+    not_applicable: Use existing global runtime/test dependencies; no venv, live data
+      ingestion or host provisioning is part of verification.
+  build:
+    not_applicable: Python source has no required compiled build.
+  test_targeted:
+    argv:
+    - bwrap
+    - --die-with-parent
+    - --unshare-net
+    - --unshare-pid
+    - --ro-bind
+    - /
+    - /
+    - --tmpfs
+    - /home
+    - --tmpfs
+    - /run
+    - --tmpfs
+    - /tmp
+    - --tmpfs
+    - /mnt
+    - --tmpfs
+    - /media
+    - --tmpfs
+    - /var/lib
+    - --proc
+    - /proc
+    - --dev
+    - /dev
+    - --ro-bind
+    - .
+    - /tmp/work
+    - --chdir
+    - /tmp/work
+    - --clearenv
+    - --setenv
+    - PATH
+    - /usr/bin:/bin
+    - --setenv
+    - HOME
+    - /tmp
+    - --setenv
+    - PYTHONPATH
+    - /tmp/work:/tmp/work/src
+    - --setenv
+    - PYTHONDONTWRITEBYTECODE
+    - '1'
+    - /usr/bin/python3
+    - -B
+    - -m
+    - unittest
+    - discover
+    - -s
+    - tests
+    - -p
+    - test_chatgpt_adapter_boundary.py
+    - -v
+    cwd: .
+  test_full:
+    argv: &id001
+    - bwrap
+    - --die-with-parent
+    - --unshare-net
+    - --unshare-pid
+    - --ro-bind
+    - /
+    - /
+    - --tmpfs
+    - /home
+    - --tmpfs
+    - /run
+    - --tmpfs
+    - /tmp
+    - --tmpfs
+    - /mnt
+    - --tmpfs
+    - /media
+    - --tmpfs
+    - /var/lib
+    - --proc
+    - /proc
+    - --dev
+    - /dev
+    - --ro-bind
+    - .
+    - /tmp/work
+    - --chdir
+    - /tmp/work
+    - --clearenv
+    - --setenv
+    - PATH
+    - /usr/bin:/bin
+    - --setenv
+    - HOME
+    - /tmp
+    - --setenv
+    - PYTHONPATH
+    - /tmp/work:/tmp/work/src
+    - --setenv
+    - PYTHONDONTWRITEBYTECODE
+    - '1'
+    - /usr/bin/python3
+    - -B
+    - -m
+    - unittest
+    - discover
+    - -s
+    - tests
+    - -v
+    cwd: .
+  lint:
+    argv:
+    - git
+    - diff
+    - --check
+    cwd: .
+  deploy_install:
+    not_applicable: Use the existing project installer and specialist operations only
+      within a separately requested deployment scope.
+  smoke:
+    not_applicable: Live sources, browser/compositor sessions and private data operations
+      are not capsule hooks.
+  verify:
+    fast:
+      argv:
+      - python3
+      - /home/daniele/projects/codex-roadmap/tools/project_capsule.py
+      - --repo
+      - .
+      - --mode
+      - FAST
+      cwd: .
+    full:
+      argv:
+      - python3
+      - /home/daniele/projects/codex-roadmap/tools/project_capsule.py
+      - --repo
+      - .
+      - --mode
+      - FULL
+      cwd: .
+safety:
+  invariants:
+  - Keep private exports and generated databases outside Git and test output.
+  - Preserve deterministic idempotence, canonical prompt identity and every ingested
+    record provenance.
+  - Do not substitute redacted or partial text for a better canonical source; keep
+    historical evidence.
+  risky_operations:
+  - Installation, real capture/ingestion, source recovery and live desktop/browser
+    operations require their own requested scope.
+  recovery:
+  - Preserve original data and prior good states. Use owning semantic writers and
+    consistent SQLite backups for applicable stores.
+acceptance:
+- FAST validates identity, source paths, executable commands and reviewed-source freshness.
+- FULL runs the declared isolated fixture suite; original data, credentials and desktop/browser
+  sessions remain inaccessible.
+- Live archive completeness, compositor behavior, browser-extension E2E and installed
+  runtime are separate checks, not inferred from a capsule PASS.
+references:
+  megavault: /home/daniele/MegaVault/megavault.sqlite
+  c2: Historical-only /home/daniele/projects/codex-roadmap/roadmap.sqlite; no lifecycle
+    writes or dispatcher use.
+freshness:
+  reviewed_commit: 7375f0ed7df4e81ddf97c93573b7c1affbefe0ff
+  watch_paths:
+  - prompt_history
+  - schema
+  - queries
+  - extension
+  - research
+  - tools
+  - systemd
+  - tests
+  - NV.txt
+artifacts:
+  agents: AGENTS.md
+  architecture: README.md
+  operations: README.md
+  data_model: schema/prompt_evidence.sql
+validation_hooks:
+- id: isolated-offline-suite
+  argv: *id001
+  cwd: .
+  safe: true
+change_verification:
+- paths:
+  - project-capsule.yaml
+  - AGENTS.md
+  - '*.md'
+  commands:
+  - lint
+- paths:
+  - '*.py'
+  - prompt_history/*
+  - host/*
+  - extension/*
+  - schema/*
+  - tests/*
+  - tools/*
+  - systemd/*
+  - contrib/*
+  commands:
+  - test_full
