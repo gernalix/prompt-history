@@ -72,3 +72,18 @@ advanced checkpoints.
    update only the narrow adapter, and keep the previous fallback usable.
 6. Sync must remain idempotent; repeated unchanged imports must not create
    duplicate logical prompts, relations or executions.
+
+## Native persisted Codex history
+
+Newer app versions migrate JSONL rollouts into `~/.codex/thread_history_1.sqlite`.
+`ingest-codex-history --db DATABASE --input HISTORY_DB` reads a consistent,
+read-only SQLite snapshot of persisted public items, including intermediate
+messages, commands and tool outputs. Item IDs, turn IDs, ordering, recorded
+start/end timestamps and original item JSON remain in private provenance.
+Hidden reasoning is excluded. No execution-cost rows are created.
+
+The transcript service also imports this database after Session Bandit. The
+`codex-native-history` source uses stable thread/turn/item identity and preserves
+updates without relying on surviving rollout files. It overlaps older normalized
+transcripts: source counts must not be added as unique message counts. Coverage
+must compare source item identities, not just service success or newest dates.
