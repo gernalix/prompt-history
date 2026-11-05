@@ -17,6 +17,7 @@ from .adapters import (
     ingest_switcher,
     link_explicit_prompt_ids,
 )
+from .codex_history import ingest_codex_history
 from .store import connect, init_db
 
 
@@ -239,6 +240,8 @@ def cmd_sync(args: argparse.Namespace) -> None:
             counts["switcher"] = ingest_switcher(conn, args.switcher)
         else:
             counts["switcher"] = 0
+        if args.codex_history:
+            counts["codex_history"] = ingest_codex_history(conn, args.codex_history)
         counts["links"] = link_explicit_prompt_ids(conn)
         conn.commit()
     finally:
@@ -292,6 +295,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--repo", required=True)
     p.set_defaults(func=lambda a: _with_db(a, ingest_codex_usage, a.repo))
 
+    p = sub.add_parser("ingest-codex-history")
+    p.add_argument("--db", required=True)
+    p.add_argument("--input", required=True)
+    p.set_defaults(func=lambda a: _with_db(a, ingest_codex_history, a.input))
+
     p = sub.add_parser("ingest-chatgpt")
     p.add_argument("--db", required=True)
     p.add_argument("--conversations", required=True)
@@ -344,6 +352,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--chatgpt")
     p.add_argument("--chatgpt-exporter")
     p.add_argument("--session-bandit")
+    p.add_argument("--codex-history")
     p.add_argument("--switcher")
     p.set_defaults(func=cmd_sync)
 
