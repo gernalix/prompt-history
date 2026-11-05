@@ -54,6 +54,13 @@ It deliberately creates no `executions`: `codex-usage` remains authoritative
 for model/reasoning/token/tool-call/duration/result metrics, preventing cost
 double-counting.
 
+The usage importer retries a checked source-change conflict at most twice after
+rolling back its own transaction, taking fresh inputs each time. The consistency
+check stays enforced: continuously changing inputs still fail, malformed input
+and other errors are not retried, and a caller-owned transaction is never rolled
+back or replayed by the importer. Failed attempts leave no partial records or
+advanced checkpoints.
+
 ## Runtime policy
 
 1. Prefer already-present authoritative local data over re-downloading.

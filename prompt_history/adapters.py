@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from .store import ingest_record, ingest_records, prompt_uid_for, utc_now
-from .incremental import atomic, checkpointed, get, put, stamp, transactional as _transactional
+from .incremental import InputChanged, atomic, checkpointed, get, put, stamp, transactional as _transactional
 
 from .chatgpt_adapters import (
     _content_text, _iso_from_epoch, ingest_chatgpt_export, _normalized_parts_text,
@@ -526,9 +526,9 @@ def _usage_changes(conn, root: Path, index: Path):
             metrics = json.loads(path.read_text(encoding='utf-8')) if path.is_file() else {}
             yield record, metrics
             if stamp(path) != metric_stamp:
-                raise RuntimeError(f'input changed during ingestion: {path}')
+                raise InputChanged(f'input changed during ingestion: {path}')
             conn.execute('UPDATE usage_offsets SET stamp=? WHERE index_path=? AND offset=?',
                          (metric_stamp, str(index), row['offset']))
     if stamp(index) != before:
-        raise RuntimeError(f'input changed during ingestion: {index}')
+        raise InputChanged(f'input changed during ingestion: {index}')
     put(conn, key, json.dumps(state, separators=(',', ':')))

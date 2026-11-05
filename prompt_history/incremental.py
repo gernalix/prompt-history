@@ -8,6 +8,10 @@ from pathlib import Path
 import sqlite3
 
 
+class InputChanged(RuntimeError):
+    """A checked local source changed during an otherwise valid import."""
+
+
 @contextmanager
 def atomic(conn: sqlite3.Connection):
     # Importers nest; only the outer owner commits. BEGIN IMMEDIATE serializes
@@ -70,6 +74,14 @@ def checkpointed(*, sqlite: bool = False):
 def transactional(fn):
     @wraps(fn)
     def run(conn, *args, **kwargs):
-        with atomic(conn):
-            return fn(conn, *args, **kwargs)
+        # Only the transaction owner can safely roll back and take a fresh
+        # snapshot. Never retry arbitrary exceptions or a caller's transaction.
+        attempts = 1 if conn.in_transaction else 3
+        for attempt in range(attempts):
+            try:
+                with atomic(conn):
+                    return fn(conn, *args, **kwargs)
+            except InputChanged:
+                if attempt + 1 == attempts:
+                    raise
     return run

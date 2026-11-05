@@ -104,6 +104,38 @@ class IncrementalTests(unittest.TestCase):
         self.assertEqual(self.c.execute('SELECT COUNT(*) FROM prompts').fetchone()[0],0)
         self.assertGreater(self.usage(),0)
 
+    def test_transient_source_race_retries_without_partial_records(self):
+        self.cycle(); self.append()
+        original = a.ingest_record
+        changed = False
+        def race_once(conn, record):
+            nonlocal changed
+            result = original(conn, record)
+            if not changed:
+                changed = True
+                self.cycle(tokens=30)
+            return result
+        with mock.patch.object(a, 'ingest_record', side_effect=race_once):
+            self.assertGreater(self.usage(), 0)
+        self.assertEqual(self.c.execute('SELECT COUNT(*) FROM prompts').fetchone()[0], 1)
+        self.assertEqual(self.c.execute('SELECT COUNT(*) FROM executions').fetchone()[0], 1)
+        self.assertEqual(self.c.execute('SELECT input_tokens FROM executions').fetchone()[0], 30)
+        self.assertEqual(self.usage(), 0)
+
+    def test_nested_transaction_contention_stays_with_caller(self):
+        from prompt_history.incremental import InputChanged, transactional
+        calls = []
+        @transactional
+        def importer(conn):
+            calls.append(1)
+            raise InputChanged('changed')
+        self.c.execute('BEGIN IMMEDIATE')
+        with self.assertRaises(InputChanged):
+            importer(self.c)
+        self.assertEqual(len(calls), 1)
+        self.assertTrue(self.c.in_transaction)
+        self.c.rollback()
+
     def test_upgrade_does_not_replay_seen_payload_over_other_source(self):
         with self.c:
             first=dict(kind='prompt',source='roadmap',source_key='123456',prompt_id='123456',
