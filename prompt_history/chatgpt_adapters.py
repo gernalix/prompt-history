@@ -14,7 +14,8 @@ from pathlib import Path
 from typing import Any
 
 from .store import ingest_record, prompt_uid_for, utc_now
-from .incremental import atomic, checkpointed, get, put, stamp, transactional as _transactional
+from .filesystem import file_stamp, member_stamp, open_member
+from .incremental import atomic, checkpointed, get, put, transactional as _transactional
 
 
 def _content_text(content: Any) -> str:
@@ -145,13 +146,6 @@ CHATGPT_EXPORTER_INGEST_VERSION = 2
 
 CHATGPT_EXPORTER_ARCHIVE_MARKER_VERSION = 1
 
-def _file_sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
 def _chatgpt_exporter_file_seen(
     conn: sqlite3.Connection,
     *,
@@ -235,19 +229,22 @@ def ingest_chatgpt_exporter_archive(conn: sqlite3.Connection, archive_path: str 
     for path in paths:
         marker_key = f"v{CHATGPT_EXPORTER_INGEST_VERSION}:{path.relative_to(root).as_posix()}"
         checkpoint_key = f"v3:exporter:{path}"
-        before = stamp(path)
-        if get(conn, checkpoint_key) == before:
-            continue
-        marker_digest = _file_sha256(path)
-        # Upgrade a historical per-file checkpoint only after verifying its
-        # current bytes. Never use an archive-wide manifest as that evidence.
+        with open_member(root, path) as handle:
+            before = file_stamp(handle)
+            if get(conn, checkpoint_key) == before:
+                continue
+            payload = handle.read()
+            if file_stamp(handle) != before:
+                raise RuntimeError(f"input changed during ingestion: {path}")
+        marker_digest = hashlib.sha256(payload).hexdigest()
+        # Existing per-file markers count only after checking these exact bytes.
         if get(conn, checkpoint_key) is None and _chatgpt_exporter_file_seen(
                 conn, source_key=marker_key, digest=marker_digest):
-            if stamp(path) != before:
+            if member_stamp(root, path) != before:
                 raise RuntimeError(f"input changed during ingestion: {path}")
             put(conn, checkpoint_key, before)
             continue
-        conversation = json.loads(path.read_text(encoding="utf-8"))
+        conversation = json.loads(payload)
         if not isinstance(conversation, dict):
             continue
         if conversation.get("provider") not in {None, "chatgpt-web"}:
@@ -317,7 +314,7 @@ def ingest_chatgpt_exporter_archive(conn: sqlite3.Connection, archive_path: str 
                 }
                 count += int(ingest_record(conn, relation))
 
-            if stamp(path) != before:
+            if member_stamp(root, path) != before:
                 raise RuntimeError(f"input changed during ingestion: {path}")
             put(conn, checkpoint_key, before)
             _record_chatgpt_exporter_file(

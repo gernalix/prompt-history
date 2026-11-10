@@ -4,6 +4,7 @@
   "version": "1.0.0",
   "description": "Captures only ChatGPT content already rendered in the user-selected tab and exports local Markdown and JSON files.",
   "permissions": ["activeTab", "scripting", "storage"],
+  "background": {"service_worker": "storage.js"},
   "action": {
     "default_title": "ChatGPT Passive DOM Export",
     "default_popup": "popup.html"

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import http.server
 import json
+import shutil
 import subprocess
 import threading
 import unittest
@@ -39,12 +40,17 @@ class RecordingHandler(http.server.SimpleHTTPRequestHandler):
 
 
 class P54ExtensionTests(unittest.TestCase):
+    @unittest.skipUnless(shutil.which("node"), "Node.js is required")
+    def test_capture_and_clear_remain_consistent_across_tabs(self) -> None:
+        probe = ROOT / "tests" / "p54_lifecycle_probe.mjs"
+        subprocess.run(["node", str(probe), str(EXTENSION / "content.js")], check=True, timeout=15)
+
     def test_manifest_has_only_explicit_tab_local_permissions(self) -> None:
         manifest = json.loads((EXTENSION / "manifest.json").read_text(encoding="utf-8"))
         self.assertEqual(manifest["manifest_version"], 3)
         self.assertEqual(manifest["permissions"], ["activeTab", "scripting", "storage"])
         self.assertNotIn("host_permissions", manifest)
-        self.assertNotIn("background", manifest)
+        self.assertEqual(manifest["background"], {"service_worker": "storage.js"})
         self.assertNotIn("content_scripts", manifest)
 
     def test_runtime_has_no_network_or_automatic_gesture_apis(self) -> None:
@@ -57,7 +63,10 @@ class P54ExtensionTests(unittest.TestCase):
         content = (EXTENSION / "content.js").read_text(encoding="utf-8")
         self.assertNotIn("button.click()", content)
         self.assertNotIn("element.click()", content)
-        self.assertIn("anchor.click()", content)  # local Blob download only
+        self.assertNotIn("anchor.click()", content)
+        self.assertNotIn("createObjectURL", content)
+        popup = (EXTENSION / "popup.js").read_text(encoding="utf-8")
+        self.assertIn("anchor.click()", popup)  # local extension-origin Blob download
         self.assertIn("MutationObserver", runtime)
         self.assertIn("chrome.storage.local", runtime)
 
@@ -84,6 +93,7 @@ class P54ExtensionTests(unittest.TestCase):
         self.assertEqual(requested.count("/fixture.js"), 1, requested)
         self.assertEqual(requested.count("/extension/core.js"), 1, requested)
         self.assertNotIn("/never-requested.png", requested)
+        self.assertNotIn("never-requested.png", json.dumps(result["session"]))
         self.assertEqual(len(result["before"]), 2)
         self.assertEqual(len(result["after"]), 2)
         assistant = result["session"]["turns"][1]

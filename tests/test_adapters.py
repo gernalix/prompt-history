@@ -257,8 +257,8 @@ class AdapterTests(unittest.TestCase):
         }), encoding="utf-8")
 
         with mock.patch(
-            "prompt_history.chatgpt_adapters._file_sha256",
-            wraps=adapters._file_sha256,
+            "prompt_history.chatgpt_adapters._chatgpt_exporter_file_seen",
+            wraps=adapters._chatgpt_exporter_file_seen,
         ) as hashed:
             first = ingest_chatgpt_exporter_archive(self.conn, self.root)
             first_calls = hashed.call_count

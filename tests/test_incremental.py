@@ -42,6 +42,19 @@ class IncrementalTests(unittest.TestCase):
     def usage(self):
         return a.ingest_codex_usage(self.c, self.root)
 
+    def test_usage_rechecks_cached_metrics_path_before_reading(self):
+        metrics = self.cycle()
+        self.append()
+        self.assertGreater(self.usage(), 0)
+        before = self.c.execute("SELECT count(*) FROM source_records").fetchone()[0]
+        metrics.unlink()
+        replacement = self.root / "other.json"
+        replacement.write_text("{}")
+        metrics.symlink_to(replacement)
+        with self.assertRaises(OSError):
+            self.usage()
+        self.assertEqual(self.c.execute("SELECT count(*) FROM source_records").fetchone()[0], before)
+
     def logical(self, conn):
         result = {}
         for table in ['prompts', 'executions', 'relations', 'artifacts']:

@@ -61,9 +61,11 @@ python3 -m prompt_history.cli ingest-chatgpt-exporter \
   --db ./prompt_history.sqlite \
   --archive ~/Documents/ChatGPT/ChatGPTExport-workspace
 
-node tools/session_bandit_dump.mjs \
+python3 -m tools.publish_transcripts \
+  ~/.local/share/prompt-history/session-bandit-codex.jsonl \
+  node tools/session_bandit_dump.mjs \
   ~/.local/share/prompt-history/upstream/session-bandit/packages/core/dist/index.js \
-  ~/.codex/sessions > ~/.local/share/prompt-history/session-bandit-codex.jsonl
+  ~/.codex/sessions
 python3 -m prompt_history.cli ingest-session-bandit \
   --db ./prompt_history.sqlite \
   --input ~/.local/share/prompt-history/session-bandit-codex.jsonl

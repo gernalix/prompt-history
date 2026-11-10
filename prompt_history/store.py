@@ -8,6 +8,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
+from .filesystem import ensure_private_database
+
 ROOT = Path(__file__).resolve().parents[1]
 SCHEMA_PATH = ROOT / "schema" / "prompt_evidence.sql"
 
@@ -31,8 +33,8 @@ def text_hash(value: str) -> str:
 
 def connect(path: str | Path, *, maintenance: bool = False) -> sqlite3.Connection:
     db_path = Path(path).expanduser()
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(db_path)
+    ensure_private_database(db_path)
+    conn = sqlite3.connect(db_path.absolute().as_uri() + "?mode=rw", uri=True)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys=ON")
     if not maintenance and conn.execute("SELECT 1 FROM sqlite_master WHERE name='meta'").fetchone():

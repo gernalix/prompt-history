@@ -8,12 +8,13 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from .store import ingest_record, ingest_records, prompt_uid_for, utc_now
+from .filesystem import file_stamp, member_stamp, open_member
 from .incremental import InputChanged, atomic, checkpointed, get, put, stamp, transactional as _transactional
 
 from .chatgpt_adapters import (
     _content_text, _iso_from_epoch, ingest_chatgpt_export, _normalized_parts_text,
     CHATGPT_EXPORTER_INGEST_VERSION, CHATGPT_EXPORTER_ARCHIVE_MARKER_VERSION,
-    _file_sha256, _chatgpt_exporter_file_seen, _record_chatgpt_exporter_file,
+    _chatgpt_exporter_file_seen, _record_chatgpt_exporter_file,
     _chatgpt_exporter_archive_seen, _record_chatgpt_exporter_archive,
     ingest_chatgpt_exporter_archive, link_explicit_prompt_ids,
 )
@@ -364,13 +365,10 @@ def ingest_session_bandit_export(conn: sqlite3.Connection, input_path: str | Pat
 @_transactional
 def ingest_codex_usage(conn: sqlite3.Connection, repo_path: str | Path) -> int:
     root = Path(repo_path).expanduser()
-    index_path = root / "index" / "prompts.jsonl"
-    if not index_path.is_file():
-        raise FileNotFoundError(index_path)
 
     count = 0
     with atomic(conn):
-        for index_record, metrics in _usage_changes(conn, root, index_path):
+        for index_record, metrics in _usage_changes(conn, root):
             rel_path = index_record["path"]
             merged = {**index_record, **metrics}
             prompt_id = merged.get("prompt_id")
@@ -466,7 +464,7 @@ def ingest_switcher(conn: sqlite3.Connection, db_path: str | Path) -> int:
     return count
 
 
-def _usage_changes(conn, root: Path, index: Path):
+def _usage_changes(conn, root: Path):
     """Offsets reference the original index; no second copy of its payloads.
 
     Append fast path verifies every old byte before seeking. Rewrites and
@@ -474,12 +472,12 @@ def _usage_changes(conn, root: Path, index: Path):
     run because a completed cycle may receive revised metrics later.
     """
     root = root.resolve()
-    index = index.resolve()
-    key = f'v1:usage:{index}'
-    before = stamp(index)
+    index = root / "index" / "prompts.jsonl"
+    key = f'v2:usage:{index}'
     saved = get(conn, key)
     state = json.loads(saved) if saved else {}
-    with index.open('rb') as handle:
+    with open_member(root, index) as handle:
+        before = file_stamp(handle)
         if state.get('stamp') != before:
             offset = 0
             old_size = state.get('size', 0)
@@ -510,7 +508,10 @@ def _usage_changes(conn, root: Path, index: Path):
                     continue
                 record = json.loads(line)
                 if record.get('path'):
-                    metrics = root / str(record['path']) / 'metrics.json'
+                    relative = Path(str(record["path"]))
+                    if relative.is_absolute() or ".." in relative.parts:
+                        raise ValueError("invalid metrics path in usage index")
+                    metrics = root / relative / "metrics.json"
                     conn.execute('INSERT INTO usage_offsets(index_path,offset,metrics_path) VALUES(?,?,?)',
                                  (str(index), start, str(metrics)))
             state = dict(stamp=before, size=handle.tell(), digest=digest.hexdigest())
@@ -518,17 +519,25 @@ def _usage_changes(conn, root: Path, index: Path):
         for row in conn.execute('SELECT offset,metrics_path,stamp FROM usage_offsets '
                                 'WHERE index_path=? ORDER BY offset', (str(index),)).fetchall():
             path = Path(row['metrics_path'])
-            metric_stamp = stamp(path)
+            metric_stamp = member_stamp(root, path)
             if row['stamp'] == metric_stamp:
                 continue
             handle.seek(row['offset'])
             record = json.loads(handle.readline())
-            metrics = json.loads(path.read_text(encoding='utf-8')) if path.is_file() else {}
+            if metric_stamp == "[null]":
+                metrics = {}
+            else:
+                with open_member(root, path) as metrics_file:
+                    if file_stamp(metrics_file) != metric_stamp:
+                        raise InputChanged(f'input changed during ingestion: {path}')
+                    metrics = json.load(metrics_file)
+                    if file_stamp(metrics_file) != metric_stamp:
+                        raise InputChanged(f'input changed during ingestion: {path}')
             yield record, metrics
-            if stamp(path) != metric_stamp:
+            if member_stamp(root, path) != metric_stamp:
                 raise InputChanged(f'input changed during ingestion: {path}')
             conn.execute('UPDATE usage_offsets SET stamp=? WHERE index_path=? AND offset=?',
                          (metric_stamp, str(index), row['offset']))
-    if stamp(index) != before:
+    if member_stamp(root, index) != before:
         raise InputChanged(f'input changed during ingestion: {index}')
     put(conn, key, json.dumps(state, separators=(',', ':')))
