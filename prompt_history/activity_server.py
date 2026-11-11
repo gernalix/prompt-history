@@ -1,6 +1,7 @@
 """Loopback-only dashboard, also suitable behind Tailscale Serve."""
 from __future__ import annotations
 import argparse
+import fcntl
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 from pathlib import Path
@@ -23,7 +24,13 @@ class Cache:
     def refresh(self):
         while True:
             try:
-                data = aggregate(self.db, self.threads)
+                # Reuse the ingesters' existing lock: do not hold a SQLite
+                # read transaction across a writer's commit in rollback mode.
+                lock_path = Path('~/.local/state/prompt-history/sync.lock').expanduser()
+                lock_path.parent.mkdir(parents=True, exist_ok=True)
+                with lock_path.open('a') as source_lock:
+                    fcntl.flock(source_lock, fcntl.LOCK_SH)
+                    data = aggregate(self.db, self.threads)
                 with self.lock:
                     self.data, self.error = data, False
             except Exception:

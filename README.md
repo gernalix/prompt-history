@@ -248,7 +248,7 @@ The trailing slash is required for relative assets. No Funnel/public exposure or
 new database is needed. The host must be awake and online.
 
 The dashboard reads the existing warehouse and the read-only Codex thread index;
-it refreshes in memory every 15 minutes, while the existing ingestion timers own
+it refreshes in memory every 15 minutes under the existing ingestion lock, while the existing ingestion timers own
 source refresh. The UI polls once per minute and reports refresh failures without
 hiding cached data. It exposes aggregates only, never conversation bodies,
 titles, private paths, or original thread IDs. No external scripts/fonts/CDNs.

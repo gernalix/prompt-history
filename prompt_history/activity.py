@@ -58,12 +58,14 @@ def aggregate(db, thread_db, *, today=None):
         conn.execute('BEGIN')
         refreshed = conn.execute('SELECT max(ingested_at) FROM source_records').fetchone()[0]
         query = '''SELECT source,conversation_id,message_id,role,created_at,prompt_hash,
-            length(prompt_text),json_extract(metadata_json,'$.activity_chars'),
-            json_extract(metadata_json,'$.recipient')
+            length(prompt_text),{visibility}, {recipient}
             FROM prompts WHERE source=? AND role IN ('user','assistant')
             ORDER BY rowid'''
         for source in ('codex-native-history', 'codex-session-bandit', 'chatgpt'):
-            for _, conversation, message, role, created, digest, size, visible, recipient in conn.execute(query, (source,)):
+            fields = query.format(
+                visibility="json_extract(metadata_json,'$.activity_chars')" if source == 'chatgpt' else 'NULL',
+                recipient="json_extract(metadata_json,'$.recipient')" if source == 'chatgpt' else 'NULL')
+            for _, conversation, message, role, created, digest, size, visible, recipient in conn.execute(fields, (source,)):
                 if not conversation:
                     quality['missing_conversation'] += 1
                     continue
