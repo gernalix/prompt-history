@@ -1,0 +1,15 @@
+[Unit]
+Description=Private ChatGPT and Codex activity dashboard
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/projects/prompt-history
+ExecStart=/usr/bin/python3 -m prompt_history.activity_server
+Restart=on-failure
+RestartSec=10
+NoNewPrivileges=true
+UMask=0077
+
+[Install]
+WantedBy=default.target

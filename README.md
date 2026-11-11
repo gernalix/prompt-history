@@ -231,3 +231,47 @@ rebuild/check the index and clear that marker. No timer is enabled, disabled or 
 after preserving any derived records ingested since that backup. Never restore any
 upstream database. Inspect allocation with `db-stats --db PATH`; an empty freelist
 alone is not evidence that message text or provenance may be deleted.
+
+## Private activity dashboard
+
+Run `python3 -m prompt_history.activity_server` and open
+`http://127.0.0.1:47831/`. Install `systemd/prompt-history-dashboard.service`
+as a user service for automatic startup. It binds only to loopback. An existing
+Tailscale Serve configuration can add a private route without replacing `/`:
+
+```bash
+tailscale serve --bg --set-path /activity http://127.0.0.1:47831
+```
+
+Open `https://HOST.TAILNET.ts.net/activity/` on a device in the same tailnet.
+The trailing slash is required for relative assets. No Funnel/public exposure or
+new database is needed. The host must be awake and online.
+
+The dashboard reads the existing warehouse and the read-only Codex thread index;
+it refreshes in memory every 15 minutes, while the existing ingestion timers own
+source refresh. The UI polls once per minute and reports refresh failures without
+hiding cached data. It exposes aggregates only, never conversation bodies,
+titles, private paths, or original thread IDs. No external scripts/fonts/CDNs.
+
+Filters: 7/30/90 days or all history, user/AI/both, Unicode code-point characters,
+nonempty visible messages, or distinct active conversations. Days use Copenhagen
+civil time, including DST. Zero days are filled; the seven-day trailing mean
+includes the six days before the selected range. Conversation totals are unique
+across the period; daily bars count distinct active conversations that day.
+
+ChatGPT IDs deduplicate shared Web/Desktop exports. Their actual interface cannot
+be inferred from capture via a Web exporter: they share an explicitly unknown
+origin series. Codex Desktop requires the `Codex Desktop` originator; CLI requires
+`source=cli` or `codex-tui`. Other origins are unknown; recognized workers and
+unattended automation are excluded. Desktop includes the visible activity of root
+tasks only, not hidden worker conversations. Native public items are preferred
+over Session Bandit mirrors using per-session/role/text-hash multiset matching,
+so repeated identical messages remain repeated rather than being collapsed.
+
+ChatGPT ingestion v3 records visible text/code lengths independently of full
+archival evidence. Analysis channels, hidden messages, tool-directed messages,
+reasoning summaries and tool output do not count. Existing normalized files are
+revisited once through versioned checkpoints; until then, unverified messages
+are excluded and shown as pending, rather than treating all assistant text as
+visible. Missing dates are excluded and counted explicitly. Archive gaps remain
+gaps; this dashboard does not establish archive completeness.
