@@ -30,7 +30,7 @@ class Cache:
                 # Do not log SQL, private paths, or source payloads.
                 with self.lock:
                     self.error = True
-            time.sleep(900)
+            time.sleep(30 if self.error else 900)
 
 
 def handler(cache):
