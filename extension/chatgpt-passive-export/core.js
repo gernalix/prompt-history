@@ -23,7 +23,12 @@
     if (!raw) return "";
     try {
       const url = new URL(raw, base);
-      return ["http:", "https:", "data:", "blob:"].includes(url.protocol) ? url.href : "";
+      if (!["http:", "https:"].includes(url.protocol)) return "";
+      url.username = "";
+      url.password = "";
+      url.search = "";
+      url.hash = "";
+      return url.href;
     } catch (_) {
       return "";
     }
@@ -31,16 +36,28 @@
 
   function rendered(element) {
     if (!(element instanceof Element)) return true;
-    if (element.hidden || element.getAttribute("aria-hidden") === "true") return false;
-    const style = global.getComputedStyle ? global.getComputedStyle(element) : null;
-    return !style || (style.display !== "none" && style.visibility !== "hidden");
+    for (let node = element, child = null; node; child = node, node = node.parentElement) {
+      if (node.hidden || node.matches(SKIP_SELECTOR) || node.getAttribute("aria-hidden") === "true") return false;
+      if (child && node.matches("details:not([open])") &&
+          child !== [...node.children].find((item) => item.matches("summary"))) return false;
+      const style = global.getComputedStyle ? global.getComputedStyle(node) : null;
+      if (style && (style.display === "none" || style.visibility === "hidden" ||
+          style.visibility === "collapse" || style.contentVisibility === "hidden" || style.opacity === "0")) return false;
+    }
+    return true;
+  }
+
+  function visibleText(node) {
+    if (node.nodeType === Node.TEXT_NODE) return node.textContent || "";
+    if (node.nodeType !== Node.ELEMENT_NODE || !rendered(node) || node.matches(SKIP_SELECTOR)) return "";
+    return [...node.childNodes].map(visibleText).join("");
   }
 
   function inline(node, baseUrl) {
     if (node.nodeType === Node.TEXT_NODE) return node.textContent || "";
     if (node.nodeType !== Node.ELEMENT_NODE || !rendered(node) || node.matches(SKIP_SELECTOR)) return "";
     if (node.matches("img")) {
-      const source = safeHref(node.getAttribute("src") || node.getAttribute("data-src"), baseUrl);
+      const source = safeHref(node.getAttribute("src"), baseUrl);
       return source ? `![${node.getAttribute("alt") || "media"}](${source})` : "";
     }
     const text = [...node.childNodes].map((child) => inline(child, baseUrl)).join("");
@@ -86,7 +103,7 @@
       if (node.matches("pre")) {
         const code = node.querySelector("code");
         const language = (code?.className.match(/language-([\w+-]+)/) || [])[1] || "";
-        lines.push(`\`\`\`${language}\n${(code || node).textContent || ""}\n\`\`\``);
+        lines.push(`\`\`\`${language}\n${visibleText(code || node)}\n\`\`\``);
       } else if (node.matches("ul,ol")) {
         lines.push(listMarkdown(node, baseUrl));
       } else if (node.matches("table")) {
@@ -121,12 +138,12 @@
   }
 
   function mediaReferences(turn, baseUrl) {
-    return [...turn.querySelectorAll("img[src],img[data-src],video[src],audio[src],source[src],a[href]")].map((element) => {
-      const attribute = element.matches("a") ? "href" : (element.hasAttribute("src") ? "src" : "data-src");
+    return [...turn.querySelectorAll("img[src],video[src],audio[src],source[src],a[href]")].filter(rendered).map((element) => {
+      const attribute = element.matches("a") ? "href" : "src";
       return {
         type: element.tagName.toLowerCase(),
         url: safeHref(element.getAttribute(attribute), baseUrl),
-        label: element.getAttribute("alt") || element.getAttribute("title") || element.textContent?.trim() || ""
+        label: element.getAttribute("alt") || element.getAttribute("title") || visibleText(element).trim()
       };
     }).filter((item) => item.url);
   }
@@ -137,15 +154,18 @@
     return turns.map((turn, index) => {
       const role = roleFor(turn);
       const markdown = blocks(turn, rawUrl).trim();
-      if (!markdown) return null;
+      const text = visibleText(turn).trim();
+      const media = mediaReferences(turn, rawUrl);
+      if (!markdown && !text && !media.length) return null;
       return {
+        captureFormat: 2,
         key: turnIdentity(turn, index, role, markdown),
         role,
         capturedAt,
         markdown,
-        text: turn.innerText?.trim() || turn.textContent?.trim() || "",
-        media: mediaReferences(turn, rawUrl),
-        contentHash: hash(`${role}\n${markdown}`)
+        text,
+        media,
+        contentHash: hash(JSON.stringify([role, markdown, text, media]))
       };
     }).filter(Boolean);
   }
@@ -171,7 +191,8 @@
         next.turns.push(turn);
       }
       const latest = turn.versions.at(-1);
-      if (!latest || latest.contentHash !== captured.contentHash) turn.versions.push(captured);
+      if (!latest || latest.captureFormat !== captured.captureFormat ||
+          latest.contentHash !== captured.contentHash) turn.versions.push(captured);
     }
     return next;
   }

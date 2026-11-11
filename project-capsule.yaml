@@ -222,7 +222,7 @@ references:
   c2: Historical-only /home/daniele/projects/codex-roadmap/roadmap.sqlite; no lifecycle
     writes or dispatcher use.
 freshness:
-  reviewed_commit: 7375f0ed7df4e81ddf97c93573b7c1affbefe0ff
+  reviewed_commit: 6ca0fdbf3311c4a4c8b31e905b4e616cc57cf8c8
   watch_paths:
   - prompt_history
   - schema

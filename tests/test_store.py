@@ -1,13 +1,38 @@
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 
 from prompt_history.store import connect, ingest_record, init_db
+from tools.publish_transcripts import publish
 
 
 class StoreTests(unittest.TestCase):
+    def test_new_warehouse_is_private_with_permissive_umask(self) -> None:
+        root = Path(self.tmp.name) / "private"
+        previous = os.umask(0)
+        try:
+            conn = connect(root / "index.sqlite")
+            conn.close()
+        finally:
+            os.umask(previous)
+        self.assertEqual(root.stat().st_mode & 0o777, 0o700)
+        self.assertEqual((root / "index.sqlite").stat().st_mode & 0o777, 0o600)
+
+    def test_failed_transcript_producer_preserves_previous_output(self) -> None:
+        path = Path(self.tmp.name) / "transcripts.jsonl"
+        path.write_text("previous fixture\n")
+        with self.assertRaises(subprocess.CalledProcessError):
+            publish(path, [sys.executable, "-c", "print('partial fixture'); raise SystemExit(1)"])
+        self.assertEqual(path.read_text(), "previous fixture\n")
+        publish(path, [sys.executable, "-c", "print('new fixture')"])
+        self.assertEqual(path.read_text(), "new fixture\n")
+        self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
         self.db = Path(self.tmp.name) / "history.sqlite"

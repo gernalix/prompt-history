@@ -28,16 +28,21 @@ quando disponibile. Questa nota non è consulenza legale.
 5. Premere **Esporta Markdown + JSON**, quindi **Interrompi**.
 
 Le catture sono conservate in `chrome.storage.local`, separate per URL della
-chat. **Elimina catture locali** esegue il cleanup esplicito. L'export usa due
-Blob in memoria; immagini e file restano soltanto riferimenti URL e non vengono
-scaricati dall'estensione.
+chat. **Elimina catture locali** elimina le catture e interrompe quelle attive
+anche nelle altre schede. Il worker dell'estensione coordina soltanto le
+scritture nell'archivio locale. L'export crea due Blob nel popup. Gli URL
+estratti dagli attributi dei link e dei media perdono credenziali, parametri e
+frammenti. Le versioni salvate dal formato precedente restano nell'archivio
+locale. Per esportare una conversazione che contiene solo versioni precedenti,
+avviare una nuova cattura.
 
 ## Limiti verificabili
 
 - Testo mai reso nel DOM, pannelli mai aperti e parti virtualizzate prima
   dell'avvio non sono recuperabili.
-- La cattura richiede un URL conversazione stabile contenente `/c/` o `/share/`;
-  la pagina di nuova chat priva di identità non viene acquisita per evitare mix.
+- La cattura richiede un documento caricato direttamente sull'URL della
+  conversazione, con `/c/` o `/share/`. Dopo un cambio di conversazione nella
+  stessa scheda, ricaricare la pagina prima di avviare una nuova cattura.
 - L'estensione esporta solo testo/riepiloghi effettivamente mostrati dalla UI,
   non il chain-of-thought interno.
 - Se ChatGPT modifica struttura o attributi del DOM, alcuni turni possono avere

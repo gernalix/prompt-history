@@ -6,7 +6,7 @@ import tempfile
 import unittest
 
 from prompt_history.activity import aggregate, summarize, classify
-from prompt_history.chatgpt_adapters import activity_text_length
+from prompt_history.chatgpt_adapters import activity_text_length, ingest_chatgpt_exporter_archive
 from prompt_history.store import connect, init_db, ingest_record
 
 
@@ -67,6 +67,29 @@ class ActivityTests(unittest.TestCase):
         self.assertEqual(result['days'][-1]['average7'],2)
         self.assertEqual(summarize(data,'7','both','conversations')['total'],1)
         with self.assertRaises(ValueError):summarize(data,'-1')
+
+    def test_security_merge_retains_dashboard_visibility_and_checkpoint(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            archive = root / 'archive'
+            conversation = archive / 'conversations' / 'sample' / 'conversation.json'
+            conversation.parent.mkdir(parents=True)
+            conversation.write_text(json.dumps({
+                'conversationId': 'sample', 'messages': [
+                    {'id': 'visible', 'role': 'assistant', 'recipient': 'all',
+                     'createTime': 1794297600, 'parts': [{'kind': 'text', 'text': 'ciao 😀'}]},
+                    {'id': 'hidden', 'role': 'assistant', 'recipient': 'all',
+                     'parts': [{'kind': 'text', 'text': 'hidden'}],
+                     'extensions': {'chatgpt': {'channel': 'analysis'}}}]}))
+            conn = connect(root / 'history.sqlite')
+            try:
+                init_db(conn)
+                ingest_chatgpt_exporter_archive(conn, archive)
+                rows = dict(conn.execute("SELECT message_id, json_extract(metadata_json, '$.activity_chars') FROM prompts"))
+                self.assertEqual(rows, {'visible': 6, 'hidden': 0})
+                self.assertEqual(ingest_chatgpt_exporter_archive(conn, archive), 0)
+            finally:
+                conn.close()
 
     def test_origin_requires_evidence(self):
         self.assertEqual(classify(('vscode',None)),'unknown')

@@ -6,6 +6,7 @@ from pathlib import Path
 import shutil
 import sqlite3
 
+from .filesystem import private_directory
 from .store import connect, init_db, migrate_fts
 
 
@@ -27,9 +28,9 @@ def verify(conn):
 
 
 def optimize(db_path, backup_path):
-    db = Path(db_path).expanduser().resolve()
-    backup = Path(backup_path).expanduser().resolve()
-    if db == backup or backup.exists():
+    db = Path(db_path).expanduser().absolute()
+    backup = Path(backup_path).expanduser().absolute()
+    if db == backup or backup.exists() or backup.is_symlink():
         raise ValueError('backup must be a new, separate file')
     required = db.stat().st_size * 3
     for directory in {db.parent, backup.parent}:
@@ -39,14 +40,16 @@ def optimize(db_path, backup_path):
     try:
         verify(conn)
         before = db_stats(conn)
-        fd = os.open(backup, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-        os.close(fd)
-        dest = sqlite3.connect(backup)
-        try:
-            conn.backup(dest)
-            verify(dest)
-        finally:
-            dest.close()
+        with private_directory(backup.parent) as directory:
+            fd = os.open(backup.name, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600,
+                         dir_fd=directory)
+            os.close(fd)
+            dest = sqlite3.connect(f"{backup.as_uri()}?mode=rw", uri=True)
+            try:
+                conn.backup(dest)
+                verify(dest)
+            finally:
+                dest.close()
         # Keep readers/writers out across VACUUM's implicit transaction and the
         # following index rebuild; release this connection only after readback.
         conn.execute('PRAGMA busy_timeout=120000')
