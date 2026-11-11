@@ -98,6 +98,8 @@ def ingest_chatgpt_export(conn: sqlite3.Connection, conversations_path: str | Pa
                     "text_quality": 100,
                     "created_at": _iso_from_epoch(message.get("create_time")),
                     "metadata": {
+                        "activity_chars": activity_text_length(message),
+                        "activity_version": 1,
                         "conversation_title": title,
                         "model_slug": metadata.get("model_slug"),
                         "recipient": message.get("recipient"),
@@ -142,7 +144,25 @@ def _normalized_parts_text(parts: Any) -> str:
             out.append(text)
     return "\n".join(out).strip()
 
-CHATGPT_EXPORTER_INGEST_VERSION = 2
+def activity_text_length(message: dict) -> int:
+    """Count only visible text/code; retain the full evidence text separately."""
+    raw = (message.get("extensions") or {}).get("chatgpt") or message
+    metadata = raw.get("metadata") or {}
+    if (raw.get("channel") not in {None, "final", "commentary"}
+            or metadata.get("is_visually_hidden_from_conversation")
+            or message.get("recipient") not in {None, "all"}):
+        return 0
+    parts = message.get("parts")
+    if isinstance(parts, list):
+        return sum(len(p["text"]) for p in parts if isinstance(p, dict)
+                   and p.get("kind") in {"text", "code"} and isinstance(p.get("text"), str))
+    content = message.get("content") or {}
+    if content.get("content_type") not in {"text", "multimodal_text", "code"}:
+        return 0
+    return len(_content_text(content))
+
+
+CHATGPT_EXPORTER_INGEST_VERSION = 3
 
 CHATGPT_EXPORTER_ARCHIVE_MARKER_VERSION = 1
 
@@ -228,7 +248,7 @@ def ingest_chatgpt_exporter_archive(conn: sqlite3.Connection, archive_path: str 
     count = 0
     for path in paths:
         marker_key = f"v{CHATGPT_EXPORTER_INGEST_VERSION}:{path.relative_to(root).as_posix()}"
-        checkpoint_key = f"v3:exporter:{path}"
+        checkpoint_key = f"v4:exporter:{path}"
         with open_member(root, path) as handle:
             before = file_stamp(handle)
             if get(conn, checkpoint_key) == before:
@@ -281,6 +301,8 @@ def ingest_chatgpt_exporter_archive(conn: sqlite3.Connection, archive_path: str 
                     "text_quality": 100,
                     "created_at": _iso_from_epoch(message.get("createTime")),
                     "metadata": {
+                        "activity_chars": activity_text_length(message),
+                        "activity_version": 1,
                         "provider": "chatgpt-web",
                         "upstream": "siraht/ChatGPTExporter",
                         "normalizer_version": conversation.get("normalizerVersion"),
